@@ -1036,12 +1036,17 @@ async def get_stats():
 
 @app.on_event("startup")
 async def startup_event():
-    """Pre-warm cache on startup."""
-    import asyncio
-    logger.info("🚀 ConferencePapers backend starting...")
-    # Fire and forget
-    for year in YEARS:
-        asyncio.create_task(_fetch_year_papers(year))
+    """
+    Startup: log readiness only.  No pre-warming — all fetches are demand-driven
+    once the user submits a search from the frontend.
+
+    Parallelism model (already in place):
+      • asyncio.gather()      — concurrent (conference × year) tasks
+      • loop.run_in_executor() — thread-pool for blocking arXiv / OpenReview SDKs
+      • Per-key asyncio.Lock  — prevents thundering-herd duplicate L3 fetches
+      • CPU-heavy work (clustering, UMAP, embeddings) also runs in executor
+    """
+    logger.info("🚀 ConferencePapers backend ready — waiting for user search requests.")
 
 
 if __name__ == "__main__":

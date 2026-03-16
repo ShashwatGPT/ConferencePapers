@@ -110,11 +110,11 @@
 
     <!-- Active filter summary (click to expand) -->
     <button id="configToggle" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 hover:border-indigo-500 transition text-xs" style="background:#13131f">
-      <span class="text-indigo-300 font-semibold" id="activeConfsLabel">ICLR</span>
+      <span class="text-indigo-300 font-semibold" id="activeConfsLabel">—</span>
       <span class="text-slate-500">·</span>
       <span class="text-slate-300" id="yearRangeLabel">2024 – 2026</span>
       <span class="text-slate-500">·</span>
-      <span class="text-slate-400 max-w-36 truncate" id="activeTopicLabel">Agents for Productivity</span>
+      <span class="text-slate-400 max-w-36 truncate" id="activeTopicLabel">configure search ↓</span>
       <span class="text-slate-600 ml-1">⚙</span>
     </button>
 
@@ -133,12 +133,12 @@
 
     <div class="ml-auto flex items-center gap-2">
       <button id="refreshBtn" class="btn-ghost text-xs px-3 py-1.5">↺ Refresh</button>
-      <div id="statusDot" class="w-2 h-2 rounded-full bg-yellow-400 loading-pulse" title="Loading data..."></div>
+      <div id="statusDot" class="w-2 h-2 rounded-full bg-slate-600" title="No search run yet"></div>
     </div>
   </header>
 
-  <!-- Row 2: collapsible config panel -->
-  <div id="configPanel" class="hidden border-t border-slate-800 px-6 py-4">
+  <!-- Row 2: collapsible config panel — open by default until first search -->
+  <div id="configPanel" class="border-t border-slate-800 px-6 py-4">
     <div class="flex flex-wrap gap-6 items-end max-w-5xl">
 
       <!-- Year dual range slider -->
@@ -161,7 +161,7 @@
       <div class="flex-1" style="min-width:200px">
         <label class="text-xs text-slate-400 mb-2 block font-medium">Conferences</label>
         <div class="flex flex-wrap gap-1.5" id="confChips">
-          <label class="conf-label active"><input type="checkbox" class="conf-cb" value="ICLR" checked hidden>ICLR</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="ICLR" hidden>ICLR</label>
           <label class="conf-label"><input type="checkbox" class="conf-cb" value="ICML" hidden>ICML</label>
           <label class="conf-label"><input type="checkbox" class="conf-cb" value="NeurIPS" hidden>NeurIPS</label>
           <label class="conf-label"><input type="checkbox" class="conf-cb" value="AAAI" hidden>AAAI</label>
@@ -174,10 +174,19 @@
       <div class="flex-1" style="min-width:260px">
         <label class="text-xs text-slate-400 mb-2 block font-medium">Research Topic / Query</label>
         <div class="flex gap-2">
-          <input type="text" id="topicInput" value="Agents for Productivity" placeholder="e.g. Agents for Productivity" class="text-sm flex-1" style="width:auto">
-          <button id="applyTopicBtn" class="btn-primary text-xs px-4 py-2 flex-shrink-0">Apply</button>
+          <input type="text" id="topicInput" value="" placeholder="e.g. Agents for Productivity" class="text-sm flex-1" style="width:auto">
+          <button id="applyTopicBtn" class="btn-ghost text-xs px-4 py-2 flex-shrink-0">Apply</button>
         </div>
-        <p class="text-xs text-slate-600 mt-1">Press Enter or click Apply to search. Changing topic triggers a fresh API fetch.</p>
+        <p class="text-xs text-slate-600 mt-1">Press Enter or click Apply to set topic. After first search, changing filters re-fetches automatically.</p>
+      </div>
+
+      <!-- ── Search trigger ─────────────────────────────────────────────────── -->
+      <div class="flex-none self-end pb-1">
+        <button id="fetchBtn" onclick="_validateAndFetch()"
+          class="btn-primary px-6 py-2.5 font-semibold text-sm whitespace-nowrap">
+          🔍 Search Papers
+        </button>
+        <p id="fetchValidationMsg" class="text-xs text-red-400 mt-1 text-center hidden">Select a conference &amp; topic</p>
       </div>
     </div>
   </div>
@@ -205,12 +214,30 @@
 
   <!-- ── OVERVIEW PAGE ─────────────────────────────────────────── -->
   <div id="page-overview" class="page-content">
+
+    <!-- Welcome card — visible until the user runs their first search -->
+    <div id="welcomeCard" class="card p-8 text-center mb-6">
+      <div class="text-5xl mb-4">🔭</div>
+      <h2 class="text-xl font-bold text-white mb-2">Welcome to ConferencePapers</h2>
+      <p class="text-slate-400 text-sm max-w-lg mx-auto mb-5">Build your research intelligence dashboard. Select conferences, choose a year range, and enter a research topic — then press <strong class="text-indigo-300">Search Papers</strong>.</p>
+      <div class="flex justify-center items-center gap-2 flex-wrap text-xs mb-6">
+        <span class="px-3 py-1.5 rounded-full border border-indigo-700 text-indigo-300">① Conference <span class="text-red-400">*</span></span>
+        <span class="text-slate-700">→</span>
+        <span class="px-3 py-1.5 rounded-full border border-slate-700 text-slate-400">② Year range</span>
+        <span class="text-slate-700">→</span>
+        <span class="px-3 py-1.5 rounded-full border border-indigo-700 text-indigo-300">③ Research topic <span class="text-red-400">*</span></span>
+        <span class="text-slate-700">→</span>
+        <button onclick="_validateAndFetch()" class="btn-primary px-4 py-1.5 text-xs font-semibold">🔍 Search Papers</button>
+      </div>
+      <p class="text-xs text-slate-600">Marked with <span class="text-red-400">*</span> are required. The config panel is open above.</p>
+    </div>
+
     <!-- Stats row -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="statsRow">
-      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Total Papers</div><div id="stat-total" class="text-2xl font-bold text-white loading-pulse">—</div></div>
-      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg Citations</div><div id="stat-citations" class="text-2xl font-bold text-white loading-pulse">—</div></div>
-      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg ICLR Flavor</div><div id="stat-flavor" class="text-2xl font-bold text-white loading-pulse">—</div></div>
-      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Top Cluster</div><div id="stat-cluster" class="text-sm font-semibold text-indigo-400 loading-pulse">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Total Papers</div><div id="stat-total" class="text-2xl font-bold text-white">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg Citations</div><div id="stat-citations" class="text-2xl font-bold text-white">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg ICLR Flavor</div><div id="stat-flavor" class="text-2xl font-bold text-white">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Top Cluster</div><div id="stat-cluster" class="text-sm font-semibold text-indigo-400">—</div></div>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -479,8 +506,8 @@ let state = {
   papers: [],
   yearMin: 2024,
   yearMax: 2026,
-  conferences: ['ICLR'],
-  topic: 'Agents for Productivity',
+  conferences: [],          // empty — user must select before first search
+  topic: '',                // empty — user must type before first search
   tier: 'all',
   activePage: 'overview',
   searchText: '',
@@ -489,6 +516,7 @@ let state = {
   PAGE_SIZE: 30,
   semanticResults: null,    // null = normal mode; array = semantic mode
   expandedQueries:  [],     // RAG-Fusion expanded query variants
+  hasFetched: false,        // gatekeeper: only fetch after explicit Search click
 };
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -538,27 +566,50 @@ function _hideLoading() {
   $('loadingBanner').classList.remove('visible');
 }
 
-// Called whenever yearMin/yearMax/conferences/topic/tier changes.
-// Invalidates all cached data, reloads papers, and reloads the active page view.
+// Sync header labels whenever any filter changes.
+// Only triggers a re-fetch if the user has already run the first explicit Search.
 function onFiltersChanged() {
-  // Sync label in header pill
-  $('activeConfsLabel').textContent   = state.conferences.join(', ');
-  $('activeTopicLabel').textContent   = state.topic;
+  const confs = state.conferences;
+  $('activeConfsLabel').textContent   = confs.length ? confs.join(', ') : '—';
+  $('activeTopicLabel').textContent   = state.topic  || 'configure search ↓';
   const lo = state.yearMin, hi = state.yearMax;
   $('yearRangeLabel').textContent     = lo === hi ? `${lo}` : `${lo} – ${hi}`;
   $('yearRangeLabelFull').textContent = lo === hi ? `${lo}` : `${lo} – ${hi}`;
+  if (state.hasFetched) _doFetch();
+}
 
-  const confStr  = state.conferences.join(', ');
-  const yearStr  = lo === hi ? lo : `${lo}–${hi}`;
-  _showLoading(`⏳ Fetching ${confStr} ${yearStr} · “${state.topic}” — this may take a moment for uncached queries…`);
-
-  // Always fetch fresh — these are NOT cache-guarded any more
+// Fire all parallel data loads for the active page.
+// asyncio.gather() on the backend handles concurrent (conf × year) fetches;
+// each year uses run_in_executor for blocking arXiv/OpenReview API calls.
+function _doFetch() {
+  const confStr = state.conferences.join(', ') || '(none)';
+  const lo = state.yearMin, hi = state.yearMax;
+  _showLoading(`⏳ Fetching ${confStr} ${lo === hi ? lo : `${lo}–${hi}`} · "${state.topic}" — parallel fetch in progress…`);
   loadPapers();
   const p = state.activePage;
-  if (p === 'landscape')  loadLandscape();
-  else if (p === 'funnel')    loadFunnel();
-  else if (p === 'trends')    loadTrends();
+  if (p === 'landscape')   loadLandscape();
+  else if (p === 'funnel')     loadFunnel();
+  else if (p === 'trends')     loadTrends();
   else if (p === 'whitespace') loadWhiteSpaces();
+}
+
+// Validate required fields (conference + topic), then launch the very first fetch.
+function _validateAndFetch() {
+  const errs = [];
+  if (!state.conferences.length)  errs.push('Select at least one conference');
+  if (!state.topic.trim())        errs.push('Enter a research topic');
+  if (errs.length) {
+    const msg = $('fetchValidationMsg');
+    if (msg) { msg.textContent = '⚠ ' + errs.join(' · '); msg.classList.remove('hidden'); }
+    toast('⚠ ' + errs.join(' · '));
+    return;
+  }
+  const msg = $('fetchValidationMsg');
+  if (msg) msg.classList.add('hidden');
+  state.hasFetched = true;
+  hide('welcomeCard');
+  hide('configPanel');
+  _doFetch();
 }
 
 // ── Data loading — NO early-return cache guards ───────────────────────────────
@@ -643,28 +694,20 @@ updateSliderTrack();
 // Labels contain hidden checkboxes; native click → change event fires automatically.
 document.querySelectorAll('.conf-cb').forEach(cb => {
   cb.addEventListener('change', () => {
-    const checked = Array.from(document.querySelectorAll('.conf-cb:checked')).map(c => c.value);
-    // At least one must be selected — default back to ICLR
-    if (checked.length === 0) {
-      document.querySelector('.conf-cb[value="ICLR"]').checked = true;
-    }
-    // Sync active class on all labels
+    // Sync active class on all conf labels
     document.querySelectorAll('.conf-label').forEach(lbl => {
-      const val = lbl.querySelector('.conf-cb').value;
-      const isChecked = document.querySelector(`.conf-cb[value="${val}"]`).checked;
-      lbl.classList.toggle('active', isChecked);
+      const v = lbl.querySelector('.conf-cb').value;
+      lbl.classList.toggle('active', document.querySelector(`.conf-cb[value="${v}"]`).checked);
     });
     state.conferences = Array.from(document.querySelectorAll('.conf-cb:checked')).map(c => c.value);
-    if (!state.conferences.length) state.conferences = ['ICLR'];
     onFiltersChanged();
   });
+
 });
 
 // ── Topic input ────────────────────────────────────────────────────────────────
 function applyTopic() {
-  const val = $('topicInput').value.trim();
-  state.topic = val || 'Agents for Productivity';
-  $('activeTopicLabel').textContent = state.topic;
+  state.topic = $('topicInput').value.trim();
   onFiltersChanged();
 }
 $('topicInput').addEventListener('keydown', e => { if (e.key === 'Enter') applyTopic(); });
@@ -1499,12 +1542,14 @@ function navigateTo(page) {
   show(`page-${page}`);
   document.querySelector(`.page-tab[data-page="${page}"]`)?.classList.add('active');
   state.activePage = page;
-  // Always fetch fresh on navigate — no cache guards
+  // Cache page always available — doesn't require paper data
+  if (page === 'cache') { loadCacheList(); return; }
+  // All other content pages require a search to have been run first
+  if (!state.hasFetched) return;
   if (page === 'landscape')  loadLandscape();
   if (page === 'funnel')     loadFunnel();
   if (page === 'trends')     loadTrends();
   if (page === 'whitespace') loadWhiteSpaces();
-  if (page === 'cache')      loadCacheList();
 }
 
 // ── Event listeners ────────────────────────────────────────────────────────────
@@ -1592,11 +1637,11 @@ $('sortSelect').addEventListener('change', e => {
 });
 $('loadMoreBtn').addEventListener('click', () => renderPapers(false));
 $('refreshBtn').addEventListener('click', async () => {
+  if (!state.hasFetched) { toast('⚠ Run a search first before refreshing.'); return; }
   $('statusDot').className = 'w-2 h-2 rounded-full bg-yellow-400 loading-pulse';
   toast('Refreshing data cache…');
   try { await apiFetch('/api/refresh'); } catch(e) {}
-  loadPapers();
-  if (state.activePage !== 'overview') navigateTo(state.activePage);
+  _doFetch();
 });
 $('closeModal').addEventListener('click', () => $('paperModal').classList.add('hidden'));
 $('paperModal').addEventListener('click', e => { if (e.target === $('paperModal')) $('paperModal').classList.add('hidden'); });
@@ -1689,8 +1734,10 @@ function timeSince(isoStr) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-loadPapers();
-loadFunnel();
+// No auto-fetch on startup. Configure conference + topic above, then press Search Papers.
+// After the first search, any filter change automatically re-fetches.
+$('statusDot').className = 'w-2 h-2 rounded-full bg-slate-600';
+onFiltersChanged();  // sync header labels to initial empty state
 </script>
 </body>
 </html>
