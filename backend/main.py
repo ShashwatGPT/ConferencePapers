@@ -201,6 +201,7 @@ async def _fetch_year_papers(
             if cached_raw:
                 accepted_density = max(len(cached_raw), 1)
                 papers = [_raw_to_paper(r, accepted_density) for r in cached_raw]
+                _assign_proxy_tiers(papers)
                 papers.sort(key=lambda p: p.relevance_score, reverse=True)
                 _PAPER_CACHE[cache_key] = papers   # atomic dict assignment (GIL)
                 logger.info(f"[L2 HIT] {conference} {year} — {len(papers)} papers")
@@ -281,6 +282,7 @@ async def _fetch_year_papers(
 
         # ── Populate L1 (atomic assignment) ──────────────────────────────────
         papers = [_raw_to_paper(r, accepted_density) for r in relevant]
+        _assign_proxy_tiers(papers)
         papers.sort(key=lambda p: p.relevance_score, reverse=True)
         _PAPER_CACHE[cache_key] = papers
         logger.info(f"[L3→Cache] {conference} {year} — {len(papers)} papers stored")
@@ -295,6 +297,39 @@ async def _build_embeddings_bg(cache_key: str, raw_papers: List[dict]):
         logger.debug(f"[Embeddings] Built index for {cache_key}")
     except Exception as e:
         logger.debug(f"[Embeddings] Background build failed for {cache_key}: {e}")
+
+
+def _assign_proxy_tiers(papers: List) -> None:
+    """
+    For papers with tier='arxiv' (fetched from arXiv, no OpenReview data),
+    assign citation-percentile proxy tiers so filters are usable:
+      top  5%  by citation_count → 'oral'
+      next 15% → 'spotlight'
+      next 40% → 'poster'
+      bottom 40% → 'arxiv'  (kept for transparency)
+    Groups are computed per (venue, year) so 2024 vs 2025 don't skew each other.
+    Applied in-place; safe to call multiple times (idempotent for non-arxiv tiers).
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for p in papers:
+        if getattr(p, "tier", "arxiv") == "arxiv":
+            groups[(getattr(p, "venue", ""), getattr(p, "year", 0))].append(p)
+
+    for group in groups.values():
+        group.sort(key=lambda p: getattr(p, "citation_count", 0) or 0, reverse=True)
+        n = len(group)
+        oral_n      = max(1, round(n * 0.05))
+        spotlight_n = max(1, round(n * 0.15))
+        poster_n    = max(1, round(n * 0.40))
+        for i, p in enumerate(group):
+            if i < oral_n:
+                p.tier = "oral"
+            elif i < oral_n + spotlight_n:
+                p.tier = "spotlight"
+            elif i < oral_n + spotlight_n + poster_n:
+                p.tier = "poster"
+            # else: keep "arxiv"
 
 
 async def _all_papers(
@@ -416,11 +451,17 @@ async def get_landscape(
     year_min:    int  = Query(2024),
     year_max:    int  = Query(2026),
     topic:       str  = Query(""),
+    tier:        str  = Query("all"),
     min_relevance: float = Query(0.0),
 ):
     conf_list  = [c.strip() for c in conferences.split(",") if c.strip()]
     real_topic = topic.strip() or FOCUS_TOPIC
     all_papers = await _all_papers(conf_list, year_min, year_max, real_topic)
+
+    tier_lower = tier.lower().strip()
+    if tier_lower not in ("all", ""):
+        allowed = {t.strip() for t in tier_lower.replace("+", ",").split(",") if t.strip()}
+        all_papers = [p for p in all_papers if p.tier in allowed]
 
     if min_relevance > 0:
         all_papers = [p for p in all_papers if p.relevance_score >= min_relevance]
@@ -471,17 +512,19 @@ async def get_funnel(
     year_min:    int = Query(2024),
     year_max:    int = Query(2026),
     topic:       str = Query(""),
+    tier:        str = Query("all"),
 ):
     """
-    Returns Sankey diagram data (global ICLR estimates) PLUS
-    per-cluster / per-area tier breakdown from the actual loaded papers.
+    Returns Sankey diagram data driven by the ACTUAL query papers (not global
+    conference totals), plus per-cluster / per-area tier breakdown.
+    Global ICLR acceptance-rate percentages are supplied separately as
+    `year_breakdown` for the rate-chart context cards.
     """
     year_list = [int(y.strip()) for y in years.split(",") if y.strip().isdigit()]
     if not year_list:
         year_list = list(range(year_min, year_max + 1))
 
-    # ── Global ICLR estimates (for Sankey) ───────────────────────────────────
-    # Sources: OpenReview stats + published acceptance-rate figures
+    # ── Global ICLR estimates (acceptance-rate context only) ─────────────────
     ICLR_ESTIMATES = {
         2020: {"total": 2594,  "oral": 48,  "spotlight": 108, "poster": 531,  "reject": 1907},
         2021: {"total": 2997,  "oral": 53,  "spotlight": 114, "poster": 693,  "reject": 2137},
@@ -495,54 +538,70 @@ async def get_funnel(
     def _pct(n: int, total: int) -> float:
         return round(n / total * 100, 1) if total else 0.0
 
-    nodes = [{"id": "Submissions", "label": "All Submissions"}]
-    links = []
     year_breakdown = {}
-
     for year in year_list:
         if year not in ICLR_ESTIMATES:
             continue
         est    = ICLR_ESTIMATES[year]
         total  = est["total"]
         accept = est["oral"] + est["spotlight"] + est["poster"]
-
-        # Augment with percentage fields consumed by the frontend
-        est_with_pct = {
+        year_breakdown[year] = {
             **est,
-            "pct_oral":      _pct(est["oral"],      total),
-            "pct_spotlight": _pct(est["spotlight"],  total),
-            "pct_poster":    _pct(est["poster"],     total),
-            "pct_reject":    _pct(est["reject"],     total),
-            "pct_accept":    _pct(accept,            total),
+            "pct_oral":      _pct(est["oral"],     total),
+            "pct_spotlight": _pct(est["spotlight"], total),
+            "pct_poster":    _pct(est["poster"],    total),
+            "pct_reject":    _pct(est["reject"],    total),
+            "pct_accept":    _pct(accept,           total),
         }
 
-        year_node = f"ICLR {year}"
-        nodes.append({"id": year_node, "label": f"ICLR {year} ({total:,})"})
-        links.append({"source": "Submissions", "target": year_node, "value": total})
-        oral_node = f"{year} Oral"
-        spot_node = f"{year} Spotlight"
-        post_node = f"{year} Poster"
-        rej_node  = f"{year} Rejected"
-        nodes += [
-            {"id": oral_node, "label": f"Oral — {est_with_pct['pct_oral']}%"},
-            {"id": spot_node, "label": f"Spotlight — {est_with_pct['pct_spotlight']}%"},
-            {"id": post_node, "label": f"Poster — {est_with_pct['pct_poster']}%"},
-            {"id": rej_node,  "label": f"Rejected — {est_with_pct['pct_reject']}%"},
-        ]
-        links += [
-            {"source": year_node, "target": oral_node, "value": est["oral"]},
-            {"source": year_node, "target": spot_node, "value": est["spotlight"]},
-            {"source": year_node, "target": post_node, "value": est["poster"]},
-            {"source": year_node, "target": rej_node,  "value": est["reject"]},
-        ]
-        year_breakdown[year] = est_with_pct
-
-    # ── Per-cluster breakdown from actual fetched papers ─────────────────────
+    # ── Load actual query papers ──────────────────────────────────────────────
     conf_list  = [c.strip() for c in conferences.split(",") if c.strip()]
     real_topic = topic.strip() or FOCUS_TOPIC
     all_papers = await _all_papers(conf_list, year_min, year_max, real_topic)
 
-    # Build per-cluster stats
+    # Tier filter  
+    tier_lower = tier.lower().strip()
+    if tier_lower not in ("all", ""):
+        allowed = {t.strip() for t in tier_lower.replace("+", ",").split(",") if t.strip()}
+        all_papers = [p for p in all_papers if p.tier in allowed]
+
+    # ── Build query-driven Sankey ─────────────────────────────────────────────
+    # Nodes: root → year → tier
+    nodes = [{"id": "Query Papers", "label": f"Query: {real_topic[:40]}"}]
+    links = []
+
+    for year in year_list:
+        yr_papers = [p for p in all_papers if p.year == year]
+        if not yr_papers:
+            continue
+        yr_total = len(yr_papers)
+        yr_oral      = sum(1 for p in yr_papers if p.tier == "oral")
+        yr_spotlight = sum(1 for p in yr_papers if p.tier == "spotlight")
+        yr_poster    = sum(1 for p in yr_papers if p.tier == "poster")
+        yr_arxiv     = sum(1 for p in yr_papers if p.tier == "arxiv")
+
+        # Global acceptance rate for the label (context)
+        global_rate = ""
+        if year in year_breakdown:
+            global_rate = f" · {year_breakdown[year]['pct_accept']}% global acc."
+
+        yr_node = f"Query {year}"
+        nodes.append({"id": yr_node, "label": f"{year} ({yr_total} papers{global_rate})"})
+        links.append({"source": "Query Papers", "target": yr_node, "value": yr_total})
+
+        for tier_name, count, label_suffix in [
+            ("oral",      yr_oral,      f"Oral ★"),
+            ("spotlight", yr_spotlight, f"Spotlight"),
+            ("poster",    yr_poster,    f"Poster"),
+            ("arxiv",     yr_arxiv,     f"arXiv-only"),
+        ]:
+            if count == 0:
+                continue
+            t_node = f"{year} {tier_name.capitalize()}"
+            nodes.append({"id": t_node, "label": f"{label_suffix} — {count}"})
+            links.append({"source": yr_node, "target": t_node, "value": count})
+
+    # ── Per-cluster breakdown from query papers ───────────────────────────────
     from collections import defaultdict
     cluster_stats: dict = defaultdict(lambda: {"oral": 0, "spotlight": 0, "poster": 0, "arxiv": 0, "total": 0})
     for p in all_papers:
@@ -550,7 +609,6 @@ async def get_funnel(
         cluster_stats[label][p.tier] = cluster_stats[label].get(p.tier, 0) + 1
         cluster_stats[label]["total"] += 1
 
-    # Build per-cluster + per-year pivot
     year_cluster_stats: dict = defaultdict(lambda: defaultdict(lambda: {"oral": 0, "spotlight": 0, "poster": 0, "total": 0}))
     for p in all_papers:
         label = p.cluster_label or "General"
@@ -558,23 +616,23 @@ async def get_funnel(
         year_cluster_stats[yr][label][p.tier] = year_cluster_stats[yr][label].get(p.tier, 0) + 1
         year_cluster_stats[yr][label]["total"] += 1
 
-    # Convert defaultdicts to plain dicts for JSON serialisation
-    area_breakdown = {k: dict(v) for k, v in cluster_stats.items()}
-    # Sort by total descending
-    area_breakdown = dict(sorted(area_breakdown.items(), key=lambda x: x[1]["total"], reverse=True))
-
+    area_breakdown = dict(sorted(
+        {k: dict(v) for k, v in cluster_stats.items()}.items(),
+        key=lambda x: x[1]["total"], reverse=True
+    ))
     year_area_breakdown = {
         yr: {label: dict(stats) for label, stats in clusters.items()}
         for yr, clusters in year_cluster_stats.items()
     }
 
     return {
-        "nodes": nodes,
-        "links": links,
-        "year_breakdown": year_breakdown,
-        "area_breakdown": area_breakdown,
+        "nodes":               nodes,
+        "links":               links,
+        "year_breakdown":      year_breakdown,  # global ICLR rates (context)
+        "area_breakdown":      area_breakdown,
         "year_area_breakdown": year_area_breakdown,
         "total_papers_fetched": len(all_papers),
+        "query_topic":         real_topic,
     }
 
 
@@ -584,10 +642,16 @@ async def get_trends(
     year_min:    int = Query(2024),
     year_max:    int = Query(2026),
     topic:       str = Query(""),
+    tier:        str = Query("all"),
 ):
     conf_list  = [c.strip() for c in conferences.split(",") if c.strip()]
     real_topic = topic.strip() or FOCUS_TOPIC
     year_list  = list(range(year_min, year_max + 1))
+
+    tier_lower = tier.lower().strip()
+    allowed_tiers = None
+    if tier_lower not in ("all", ""):
+        allowed_tiers = {t.strip() for t in tier_lower.replace("+", ",").split(",") if t.strip()}
 
     TREND_TOPICS = [
         "tool use", "multi-agent", "long-horizon planning",
@@ -598,6 +662,8 @@ async def get_trends(
     trend_data: dict = {t: {} for t in TREND_TOPICS}
     for year in year_list:
         papers = await _all_papers(conf_list, year, year, real_topic)
+        if allowed_tiers:
+            papers = [p for p in papers if p.tier in allowed_tiers]
         for topic_t in TREND_TOPICS:
             trend_data[topic_t][str(year)] = sum(
                 1 for p in papers if topic_t.lower() in (p.title + " " + p.abstract).lower()
@@ -612,20 +678,97 @@ async def get_white_spaces(
     year_min:    int = Query(2024),
     year_max:    int = Query(2026),
     topic:       str = Query(""),
+    tier:        str = Query("all"),
 ):
     """
-    Identify White Spaces: clusters where citation interest exists
-    but academic paper density is low.
+    Identify White Spaces: structured per-cluster analysis showing
+    Demand / Exists (Y) / Tried-not-accepted (Z') / Gap (Z).
+    Top results are enriched with an LLM narrative.
     """
     conf_list  = [c.strip() for c in conferences.split(",") if c.strip()]
     real_topic = topic.strip() or FOCUS_TOPIC
     all_papers = await _all_papers(conf_list, year_min, year_max, real_topic)
 
+    tier_lower = tier.lower().strip()
+    if tier_lower not in ("all", ""):
+        allowed = {t.strip() for t in tier_lower.replace("+", ",").split(",") if t.strip()}
+        all_papers = [p for p in all_papers if p.tier in allowed]
+
     if not all_papers:
         return {"white_spaces": [], "message": "No papers loaded yet"}
 
-    raw_dicts  = [p.dict() for p in all_papers]
+    raw_dicts    = [p.dict() for p in all_papers]
     white_spaces = detect_white_spaces(raw_dicts)
+
+    # ── LLM narrative enrichment (top 6 results, parallel) ──────────────────
+    loop = asyncio.get_event_loop()
+
+    def _llm_narrative(ws: dict) -> str | None:
+        """Generate a 3-sentence narrative: DEMAND / EXISTS / GAP."""
+        try:
+            from query_expander import _get_llm
+            llm = _get_llm()
+            if not llm or llm is False:
+                return None
+
+            exists_lines = "\n".join(
+                f'  • "{p["title"][:80]}" ({p["year"]}, {p["tier"]}, {p["citations"]} cit.)'
+                for p in ws["what_exists"]
+            ) or "  • (no accepted papers in this cluster)"
+
+            tried_lines = "\n".join(
+                f'  • "{p["title"][:80]}" ({p["year"]}, arXiv, {p["citations"]} cit.)'
+                for p in ws["attempted"]
+            ) or "  • (no arXiv attempts found)"
+
+            prompt = f"""\
+You are a research strategy analyst for ML/NLP conferences (ICLR, NeurIPS, ICML).
+
+Research cluster: "{ws['cluster_label']}"
+Stats: {ws['paper_count']} papers total | {ws['accepted_count']} accepted at top venues | {ws['arxiv_count']} arXiv-only (tried, not accepted)
+Avg citations: {ws['avg_citations']} | Citation velocity: {ws['avg_velocity']} cit/month | Gap score: {ws['gap_score']}× (>1 means sparse vs average cluster)
+Demand signals: {', '.join(ws['demand_signals'])}
+
+Accepted papers in this cluster (what EXISTS — "Y has been done"):
+{exists_lines}
+
+arXiv-only papers (TRIED but not accepted — "Z' was attempted"):
+{tried_lines}
+
+Write exactly 3 concise sentences (no bullet points, no labels, plain flowing text):
+1. State the research demand — what real-world or theoretical need drives interest here (cite the signal: citations, velocity, trend).
+2. State what has already been published — name 1-2 accepted papers and what sub-problem they solve.
+3. State the precise gap — what has NOT been solved, why arXiv attempts fell short (if any), and what a strong paper could do next.
+
+Be specific and concrete. Max 55 words per sentence. Do not use phrases like "In conclusion" or "Overall"."""
+
+            raw, _ = llm.call_llm_with_retry(
+                user_message=prompt,
+                system_message="You are a concise, precise research strategy analyst. Output only the 3 sentences — no preamble, no labels.",
+            )
+            if raw is None:
+                return None
+            text = raw if isinstance(raw, str) else str(raw)
+            return text.strip()
+        except Exception as exc:
+            logger.warning(f"[WhiteSpace] LLM narrative failed: {exc}")
+            return None
+
+    async def _enrich(ws: dict) -> dict:
+        narrative = await loop.run_in_executor(None, _llm_narrative, ws)
+        if narrative:
+            ws["opportunity"] = narrative
+            ws["llm_narrative"] = True
+        else:
+            ws["llm_narrative"] = False
+        return ws
+
+    # Enrich top 6 in parallel; leave the rest with template narratives
+    top_n = min(6, len(white_spaces))
+    if top_n:
+        enriched = await asyncio.gather(*[_enrich(ws) for ws in white_spaces[:top_n]])
+        white_spaces[:top_n] = list(enriched)
+
     return {"white_spaces": white_spaces, "total_papers": len(all_papers)}
 
 

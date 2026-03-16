@@ -175,20 +175,24 @@ def extract_fatal_flaws(reviews: List[dict]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# White Space detection  — fixed: uses citation velocity + density gap
+# White Space detection  — structured narrative: Demand / Exists / Tried / Gap
 # ---------------------------------------------------------------------------
 
-def detect_white_spaces(all_papers: List[dict], min_papers: int = 2) -> List[dict]:
+def detect_white_spaces(all_papers: List[dict], min_papers: int = 1) -> List[dict]:
     """
-    White Space = cluster where  (avg_citation_velocity  is meaningful)
-                               AND (paper count is below average cluster density).
+    For each research cluster, produce a rich structured description:
 
-    No GitHub stars required.
+      • what_exists   — accepted papers (oral/spotlight/poster) = "Y has been done"
+      • attempted     — arXiv-only papers = "Z' tried but not accepted at top venues"
+      • demand_signals — citation velocity, trend, stars = "there is demand for X"
+      • gap_description — rule-based statement of what specifically is missing
+      • opportunity   — template narrative (overridden by LLM in the API endpoint)
+      • year_trend    — { "2024": N, "2025": M, … }
     """
     from collections import defaultdict
 
-    cluster_papers:  dict = defaultdict(list)
-    cluster_labels:  dict = {}
+    cluster_papers: dict = defaultdict(list)
+    cluster_labels: dict = {}
     for p in all_papers:
         cid = p.get("cluster_id", 0)
         cluster_papers[cid].append(p)
@@ -202,36 +206,143 @@ def detect_white_spaces(all_papers: List[dict], min_papers: int = 2) -> List[dic
     results = []
     for cid, papers in cluster_papers.items():
         count = len(papers)
-        avg_vel = sum(p.get("citation_velocity", 0.0) for p in papers) / max(count, 1)
-        avg_cit = sum(p.get("citation_count", 0) for p in papers) / max(count, 1)
-        stars   = sum(p.get("github_stars", 0) for p in papers)
+        if count < min_papers:
+            continue
 
-        # White Space criterion:
-        #   - fewer papers than average cluster (under-researched)
-        #   - AND non-trivial traction (velocity OR citations OR stars)
-        gap_score = avg_count / max(count, 1)   # >1 = sparser than average
+        # ── Split by acceptance status ──────────────────────────────────────
+        ACCEPTED_TIERS = {"oral", "spotlight", "poster"}
+        accepted   = [p for p in papers if p.get("tier") in ACCEPTED_TIERS]
+        arxiv_only = [p for p in papers if p.get("tier") == "arxiv"]
+
+        avg_vel = sum(p.get("citation_velocity", 0.0) for p in papers) / max(count, 1)
+        avg_cit = sum(p.get("citation_count", 0)      for p in papers) / max(count, 1)
+        stars   = sum(p.get("github_stars", 0)         for p in papers)
+
+        gap_score = avg_count / max(count, 1)
         traction  = avg_vel * 5 + avg_cit * 0.1 + stars * 0.5
 
-        # Show all clusters with at least 1 paper; sort by opportunity score
-        # (removed strict traction filter — real data often has 0 velocity)
-        if count >= 1:
-            results.append({
-                "cluster_id":     cid,
-                "cluster_label":  cluster_labels[cid],
-                "paper_count":    count,
-                "avg_citations":  round(avg_cit, 1),
-                "avg_velocity":   round(avg_vel, 2),
-                "total_stars":    stars,
-                "gap_score":      round(gap_score, 2),
-                "traction_score": round(traction, 2),
-                "opportunity":    (
-                    f"Only {count} papers (avg {avg_count:.0f}/cluster) "
-                    f"— avg {avg_cit:.0f} citations, {avg_vel:.2f} cit/month velocity. "
-                    f"Under-theorised relative to citation interest."
-                ),
-            })
+        # ── Year trend ───────────────────────────────────────────────────────
+        year_counts: dict = defaultdict(int)
+        for p in papers:
+            if p.get("year"):
+                year_counts[str(p["year"])] += 1
+        year_trend = dict(sorted(year_counts.items()))
 
-    results.sort(key=lambda x: (x["gap_score"] * x["traction_score"]), reverse=True)
+        # ── Demand signals ───────────────────────────────────────────────────
+        demand_signals = []
+        if avg_cit >= 50:
+            demand_signals.append(f"{avg_cit:.0f} avg citations")
+        elif avg_cit >= 10:
+            demand_signals.append(f"{avg_cit:.0f} avg cit.")
+        if avg_vel >= 0.5:
+            demand_signals.append(f"{avg_vel:.1f} cit/mo (fast-growing)")
+        elif avg_vel > 0:
+            demand_signals.append(f"{avg_vel:.2f} cit/mo")
+        if stars > 0:
+            demand_signals.append(f"{stars} GitHub ⭐")
+        vals = list(year_counts.values())
+        if len(vals) >= 2 and vals[-1] > vals[0]:
+            demand_signals.append("rising YoY interest")
+        if not demand_signals:
+            demand_signals.append("emerging niche")
+
+        # ── What exists (Y) — top accepted papers by citation count ─────────
+        top_accepted = sorted(accepted, key=lambda x: x.get("citation_count", 0), reverse=True)[:3]
+        what_exists = [
+            {
+                "id":        p.get("id", ""),
+                "title":     p.get("title", ""),
+                "year":      p.get("year"),
+                "tier":      p.get("tier"),
+                "citations": p.get("citation_count", 0),
+                "arxiv_url": p.get("arxiv_url", ""),
+            }
+            for p in top_accepted
+        ]
+
+        # ── Attempted but not accepted (Z') — arXiv papers by citations ─────
+        top_attempted = sorted(arxiv_only, key=lambda x: x.get("citation_count", 0), reverse=True)[:3]
+        attempted = [
+            {
+                "id":        p.get("id", ""),
+                "title":     p.get("title", ""),
+                "year":      p.get("year"),
+                "citations": p.get("citation_count", 0),
+                "arxiv_url": p.get("arxiv_url", ""),
+            }
+            for p in top_attempted
+        ]
+
+        # ── Gap description (rule-based; LLM will override in the endpoint) ─
+        if len(accepted) == 0 and len(arxiv_only) == 0:
+            gap_desc = (
+                f"No papers found at top venues or on arXiv — "
+                f"this cluster is a genuine unexplored territory."
+            )
+        elif len(accepted) == 0:
+            gap_desc = (
+                f"{len(arxiv_only)} arXiv preprint(s) tried this space "
+                f"but none reached a top-venue acceptance — high-friction area."
+            )
+        elif len(arxiv_only) > len(accepted) * 2:
+            gap_desc = (
+                f"{len(arxiv_only)} arXiv attempts vs only {len(accepted)} accepted "
+                f"paper(s) — strong rejection signal; reviewers want deeper theory."
+            )
+        elif gap_score >= 2.5:
+            gap_desc = (
+                f"Cluster is {gap_score:.1f}× below average density "
+                f"despite {avg_cit:.0f} avg citations — "
+                f"significantly under-theorised relative to interest."
+            )
+        elif len(accepted) <= 2:
+            gap_desc = (
+                f"Only {len(accepted)} accepted paper(s) with {avg_cit:.0f} avg "
+                f"citations each — ample room for rigorous follow-up work."
+            )
+        else:
+            gap_desc = (
+                f"{len(accepted)} accepted papers cover the basics; "
+                f"sub-problems like benchmarking, theory, and scalability remain open."
+            )
+
+        # ── Template opportunity narrative (LLM override in endpoint) ────────
+        exists_str = (
+            "; ".join(f'"{p["title"][:55]}"' for p in what_exists[:2])
+            or "none accepted yet"
+        )
+        tried_str = (
+            "; ".join(f'"{p["title"][:55]}"' for p in attempted[:2])
+            or "none on arXiv either"
+        )
+        opportunity = (
+            f"DEMAND: {', '.join(demand_signals[:3])} signal real interest in "
+            f"{cluster_labels[cid]}. "
+            f"EXISTS: {exists_str}. "
+            f"TRIED: {tried_str}. "
+            f"GAP: {gap_desc}"
+        )
+
+        results.append({
+            "cluster_id":      cid,
+            "cluster_label":   cluster_labels[cid],
+            "paper_count":     count,
+            "accepted_count":  len(accepted),
+            "arxiv_count":     len(arxiv_only),
+            "avg_citations":   round(avg_cit, 1),
+            "avg_velocity":    round(avg_vel, 2),
+            "total_stars":     stars,
+            "gap_score":       round(gap_score, 2),
+            "traction_score":  round(traction, 2),
+            "year_trend":      year_trend,
+            "demand_signals":  demand_signals,
+            "what_exists":     what_exists,
+            "attempted":       attempted,
+            "gap_description": gap_desc,
+            "opportunity":     opportunity,   # replaced by LLM in endpoint
+        })
+
+    results.sort(key=lambda x: x["gap_score"] * max(x["traction_score"], 0.1), reverse=True)
     return results
 
 

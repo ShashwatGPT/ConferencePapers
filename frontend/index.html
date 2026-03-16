@@ -121,10 +121,10 @@
     <!-- Tier multi-select chips -->
     <div class="flex items-center gap-1 flex-wrap" id="tierChipsRow">
       <button class="tier-chip active" id="tierAll" data-tier="all">All tiers</button>
-      <button class="tier-chip" data-tier="oral">⬤ Oral</button>
-      <button class="tier-chip" data-tier="spotlight">⬤ Spotlight</button>
-      <button class="tier-chip" data-tier="poster">⬤ Poster</button>
-      <button class="tier-chip" data-tier="arxiv">⬤ arXiv</button>
+      <button class="tier-chip" data-tier="oral" title="Top ~5% by citations in the query — citation-impact proxy">⬤ Oral ★</button>
+      <button class="tier-chip" data-tier="spotlight" title="Next ~15% by citations — citation-impact proxy">⬤ Spotlight</button>
+      <button class="tier-chip" data-tier="poster" title="Next ~40% by citations — citation-impact proxy">⬤ Poster</button>
+      <button class="tier-chip" data-tier="arxiv" title="Lower-citation arXiv papers">⬤ arXiv</button>
     </div>
 
     <div class="ml-auto flex items-center gap-2">
@@ -228,7 +228,7 @@
       <!-- ICLR Flavor scatter -->
       <div class="card p-5">
         <h2 class="font-semibold text-white mb-4">⚗️ ICLR Flavor vs. Citation Count</h2>
-        <div id="flavorScatterOverview" style="height:260px"></div>
+        <div id="flavorScatterOverview" style="height:340px"></div>
       </div>
     </div>
   </div>
@@ -367,15 +367,15 @@
 
   <!-- ── WHITE SPACES PAGE ────────────────────────────────────── -->
   <div id="page-whitespace" class="page-content hidden">
-    <div class="mb-4">
+    <div class="mb-5">
       <h2 class="font-semibold text-white text-lg">⬜ White Space Analysis</h2>
-      <p class="text-sm text-slate-400 mt-1">Clusters where industry GitHub traction is high but accepted paper density is low — the gap between builders and theorists.</p>
+      <p class="text-sm text-slate-400 mt-1">For each research cluster: what industry demands (X), what academia has published (Y), what was tried but rejected (Z'), and the specific unexplored gap (Z).</p>
     </div>
-    <div id="whiteSpaceCards" class="space-y-3"></div>
+    <div id="whiteSpaceCards" class="space-y-5"></div>
     <div class="card p-5 mt-6">
-      <h3 class="font-semibold text-white mb-3">Impact-Niche Score Quadrant</h3>
-      <p class="text-xs text-slate-500 mb-3">Score = (Citation Velocity × GitHub Stars) / Accepted Paper Density. Top-left = White Space opportunities.</p>
-      <div id="quadrantChart" style="height:400px"></div>
+      <h3 class="font-semibold text-white mb-1">Research Gap Quadrant</h3>
+      <p class="text-xs text-slate-500 mb-3">Top-left = few accepted papers but high citation traction = white space. Bubble size = gap score (sparsity vs average).</p>
+      <div id="quadrantChart" style="height:420px"></div>
     </div>
   </div>
 
@@ -788,29 +788,45 @@ function renderClusterChart() {
   });
 }
 
+const TIER_COLORS_MAP = { oral:'#a78bfa', spotlight:'#fb923c', poster:'#22d3ee', arxiv:'#4ade80', rejected:'#f87171' };
 function renderFlavorScatterOverview() {
   const papers = state.papers;
+  if (!papers || !papers.length) return;
+
+  // Separate top papers (high flavor + high impact) for labels
+  const sorted = [...papers].sort((a,b) => (b.iclr_flavor_score||0)*Math.log1p(b.citation_count||0) - (a.iclr_flavor_score||0)*Math.log1p(a.citation_count||0));
+  const topIds = new Set(sorted.slice(0, 8).map(p => p.id));
+
   Plotly.newPlot('flavorScatterOverview', [{
     type: 'scatter', mode: 'markers',
     x: papers.map(p => p.iclr_flavor_score||0),
     y: papers.map(p => Math.log1p(p.citation_count||0)),
-    text: papers.map(p => p.title),
-    customdata: papers.map(p => p.id),
+    text: papers.map(p => topIds.has(p.id) ? p.title.slice(0,35)+'…' : ''),
+    customdata: papers.map(p => ({id:p.id, title:p.title, tier:p.tier})),
+    textposition: 'top center',
+    textfont: { size:8, color:'#94a3b8' },
     marker: {
-      size: 7, opacity: 0.8,
-      color: papers.map(p => CLUSTER_COLORS[(p.cluster_id||0) % CLUSTER_COLORS.length]),
+      size: papers.map(p => Math.max(5, Math.min(16, 5 + Math.sqrt(p.citation_count||0)*0.6))),
+      opacity: 0.85,
+      color: papers.map(p => TIER_COLORS_MAP[p.tier] || '#6366f1'),
+      line: { width:1, color:'#ffffff18' },
     },
-    hovertemplate: '<b>%{text}</b><br>ICLR Flavor: %{x:.2f}<br>log(Citations+1): %{y:.2f}<extra></extra>',
+    hovertemplate: '<b>%{customdata.title}</b><br>Tier: %{customdata.tier}<br>ICLR Flavor: %{x:.2f}<br>log(Citations+1): %{y:.2f}<extra></extra>',
   }], {
     paper_bgcolor:'transparent', plot_bgcolor:'transparent',
     font:{ color:'#94a3b8', size:11 },
-    xaxis:{ title:'ICLR Flavor Score', gridcolor:'#2a2a3e', zeroline:false, range:[0,1] },
-    yaxis:{ title:'log(Citations+1)', gridcolor:'#2a2a3e', zeroline:false },
-    margin:{ t:10, b:45, l:55, r:10 },
+    xaxis:{ title:'ICLR Flavor Score →', gridcolor:'#2a2a3e', zeroline:false, autorange:true },
+    yaxis:{ title:'↑ log(Citations+1)', gridcolor:'#2a2a3e', zeroline:false },
+    margin:{ t:10, b:50, l:60, r:10 },
+    annotations:[
+      { x:0.99, y:0.99, xref:'paper', yref:'paper', showarrow:false,
+        text:'Top-right = High Flavor + High Impact', font:{color:'#a78bfa',size:9}, align:'right' },
+    ],
   }, { responsive:true, displayModeBar:false });
 
   $('flavorScatterOverview').on('plotly_click', d => {
-    const pid = d.points[0]?.customdata;
+    const cd = d.points[0]?.customdata;
+    const pid = cd?.id ?? cd;
     if (pid) openModal(pid);
   });
 }
@@ -922,12 +938,13 @@ function renderFunnel(data) {
     return 'rgba(99,102,241,0.2)';
   }
   function nodeColor(id) {
-    if (id === 'Submissions')    return '#6366f1';
-    if (id.match(/ICLR \d{4}/)) return '#4f46e5';
-    if (id.includes('Oral'))     return '#a78bfa';
-    if (id.includes('Spotlight'))return '#fb923c';
-    if (id.includes('Poster'))   return '#22d3ee';
-    if (id.includes('Rejected')) return '#f87171';
+    if (id === 'Query Papers')         return '#6366f1';
+    if (id.match(/^Query \d{4}$/))    return '#4f46e5';
+    if (id.includes('Oral'))           return '#a78bfa';
+    if (id.includes('Spotlight'))      return '#fb923c';
+    if (id.includes('Poster'))         return '#22d3ee';
+    if (id.includes('arXiv') || id.includes('Arxiv')) return '#4ade80';
+    if (id.includes('Rejected'))       return '#f87171';
     return '#94a3b8';
   }
 
@@ -1295,8 +1312,7 @@ function renderTrends(data) {
 }
 
 // ── White Spaces ─────────────────────────────────────────────────────────────
-// Shows: cluster paper density vs citation traction.
-// Top-left = few papers but high interest = White Space opportunity.
+// Each card shows: DEMAND signal → what EXISTS (Y done) → TRIED (Z' failed) → GAP (Z open)
 function renderWhiteSpaces(data) {
   if (!data) return;
   const { white_spaces, total_papers } = data;
@@ -1310,85 +1326,118 @@ function renderWhiteSpaces(data) {
     return;
   }
 
-  // Sort by opportunity: sparse clusters with any traction first
   const ws = [...white_spaces].sort((a,b) =>
     (b.gap_score * Math.max(b.avg_citations, b.avg_velocity*10 + 1))
     - (a.gap_score * Math.max(a.avg_citations, a.avg_velocity*10 + 1))
   );
 
-  $('whiteSpaceCards').innerHTML = ws.slice(0, 6).map((w, i) => {
-    const isGap = w.paper_count < (total_papers / white_spaces.length);
+  function paperLink(p) {
+    const url = p.arxiv_url || p.openreview_url || '#';
+    const yr  = p.year ? ` (${p.year})` : '';
+    const cit = p.citations != null ? ` · ${p.citations} cit.` : '';
+    return `<a href="${url}" target="_blank" rel="noopener"
+      class="block text-xs text-slate-300 hover:text-indigo-300 truncate transition"
+      title="${p.title}">${p.title.slice(0,72)}${p.title.length>72?'…':''}<span class="text-slate-600">${yr}${cit}</span></a>`;
+  }
+
+  $('whiteSpaceCards').innerHTML = ws.slice(0, 8).map((w, i) => {
+    const isGap    = w.paper_count < (total_papers / white_spaces.length);
+    const accentCls= isGap ? 'text-green-400' : 'text-blue-400';
+    const accentBg = isGap ? '#0d2b1a' : '#0f1a2e';
+    const accentBdr= isGap ? '#166534' : '#1e3a5f';
+
+    const exists  = (w.what_exists || []).slice(0,3).map(paperLink).join('') || '<span class="text-slate-600 text-xs">None in top venues yet</span>';
+    const tried   = (w.attempted || []).slice(0,3).map(paperLink).join('') || '<span class="text-slate-600 text-xs">No arXiv attempts found</span>';
+    const demands = (w.demand_signals || []).slice(0,4).map(d =>
+      `<span class="inline-block px-1.5 py-0.5 rounded text-xs mr-1 mb-1" style="background:#1e293b;color:#94a3b8">${d}</span>`).join('');
+    const gapTxt  = w.gap_description || '';
+    const narrative = w.opportunity || '';
+    const llmBadge = w.llm_narrative
+      ? `<span class="text-xs px-1.5 py-0.5 rounded" style="background:#312e81;color:#a5b4fc">GPT</span>`
+      : '';
+
     return `
-    <div class="white-space-card" style="${isGap ? '' : 'background:#0f1a2e;border-color:#1e3a5f'}">
-      <div class="flex items-start gap-3">
-        <div class="text-xl font-bold ${isGap ? 'text-green-400' : 'text-blue-400'}">#${i+1}</div>
-        <div class="flex-1">
-          <div class="flex items-center gap-2 flex-wrap mb-1">
-            <h3 class="font-semibold ${isGap ? 'text-green-300' : 'text-blue-300'}">${w.cluster_label}</h3>
+    <div class="white-space-card" style="background:${accentBg};border-color:${accentBdr}">
+      <!-- Header -->
+      <div class="flex items-start gap-3 mb-3">
+        <div class="text-xl font-bold ${accentCls} flex-shrink-0">#${i+1}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 class="font-semibold text-white">${w.cluster_label}</h3>
             ${isGap ? `<span class="pill" style="background:#16653422;color:#4ade80;border:1px solid #16653444">Gap ×${w.gap_score.toFixed(1)}</span>` : ''}
+            ${llmBadge}
           </div>
-          <p class="text-sm text-slate-300">${w.opportunity}</p>
-          <div class="flex gap-4 mt-2 text-xs text-slate-500 flex-wrap">
+          <div class="flex gap-3 mt-1 text-xs text-slate-500 flex-wrap">
             <span>📄 ${w.paper_count} papers</span>
-            <span>📊 ${w.avg_citations.toFixed(0)} avg cit.</span>
-            <span>⚡ ${w.avg_velocity.toFixed(2)} cit/mo</span>
-            ${w.total_stars > 0 ? `<span>⭐ ${w.total_stars} stars</span>` : ''}
+            <span title="Avg citations across cluster papers">📊 ${(w.avg_citations||0).toFixed(0)} avg cit.</span>
+            <span title="Citation velocity (cit/month)">⚡ ${(w.avg_velocity||0).toFixed(2)} cit/mo</span>
+            ${(w.total_stars||0) > 0 ? `<span>⭐ ${w.total_stars}</span>` : ''}
           </div>
         </div>
       </div>
+
+      <!-- Demand signals -->
+      ${demands ? `<div class="mb-3"><div class="text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">📈 Demand Signals</div>${demands}</div>` : ''}
+
+      <!-- Y done / Z' tried -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div>
+          <div class="text-xs font-semibold mb-1.5" style="color:#22d3ee">✅ Already Published (Y done)</div>
+          <div class="space-y-1">${exists}</div>
+          ${w.accepted_count != null ? `<div class="text-xs text-slate-600 mt-1">${w.accepted_count} accepted · ${w.arxiv_count||0} arXiv-only</div>` : ''}
+        </div>
+        <div>
+          <div class="text-xs font-semibold mb-1.5" style="color:#fb923c">⚡ Tried & Not Accepted (Z' attempted)</div>
+          <div class="space-y-1">${tried}</div>
+        </div>
+      </div>
+
+      <!-- Gap -->
+      ${gapTxt ? `<div class="rounded px-3 py-2 mb-3 text-xs" style="background:#1a1a2e;border-left:3px solid #6366f1;color:#c7d2fe">${gapTxt}</div>` : ''}
+
+      <!-- LLM Narrative (opportunity) -->
+      ${narrative ? `<div class="mt-2"><div class="text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">🎯 Opportunity</div>
+        <p class="text-sm text-slate-300 leading-relaxed">${narrative}</p></div>` : ''}
     </div>`;
   }).join('');
 
-  // Chart: paper count (x) vs citation traction (y)
-  // Bubble size = gap_score (how sparse vs average)
-  // Color ramp: green (sparse/white space) → blue (well-covered)
+  // Quadrant chart
   const avgClusterSize = total_papers / Math.max(white_spaces.length, 1);
-
   Plotly.newPlot('quadrantChart', [
     {
       type:'scatter', mode:'markers+text',
       x: ws.map(w => w.paper_count),
-      y: ws.map(w => Math.max(w.avg_citations, w.avg_velocity * 50)),
+      y: ws.map(w => Math.max(w.avg_citations||0, (w.avg_velocity||0) * 50)),
       text: ws.map(w => w.cluster_label.split(' ').slice(0,3).join(' ')),
       textposition: 'top center',
       textfont: { size:9, color:'#64748b' },
       customdata: ws.map(w => w.cluster_label),
       marker: {
-        size: ws.map(w => Math.max(12, Math.min(40, w.gap_score * 14))),
-        color: ws.map(w => w.gap_score),
+        size: ws.map(w => Math.max(12, Math.min(40, (w.gap_score||1) * 14))),
+        color: ws.map(w => w.gap_score||0),
         colorscale: [[0,'#1e3a8a'],[0.4,'#6366f1'],[0.8,'#22c55e'],[1,'#4ade80']],
         showscale: true,
-        colorbar: {
-          title: 'Gap Score<br>(>1 = sparse)',
-          tickfont:{ color:'#94a3b8', size:10 },
-          titlefont:{ color:'#94a3b8', size:11 },
-          thickness: 12, len: 0.6,
-        },
+        colorbar: { title:'Gap Score<br>(>1 = sparse)', tickfont:{color:'#94a3b8',size:10}, titlefont:{color:'#94a3b8',size:11}, thickness:12, len:0.6 },
         line:{ width:1, color:'#ffffff22' },
       },
-      hovertemplate: '<b>%{customdata}</b><br>Papers in cluster: %{x}<br>Avg citations: %{y:.0f}<br>Gap score: %{marker.color:.2f}×<extra></extra>',
+      hovertemplate: '<b>%{customdata}</b><br>Papers: %{x}<br>Avg cit.: %{y:.0f}<br>Gap score: %{marker.color:.2f}×<extra></extra>',
     },
     {
-      // Vertical dashed line at avg cluster size
       type:'scatter', mode:'lines',
       x: [avgClusterSize, avgClusterSize],
-      y: [0, Math.max(...ws.map(w=>w.avg_citations), 1) * 1.3],
+      y: [0, Math.max(...ws.map(w=>w.avg_citations||0), 1) * 1.3],
       line:{ color:'#f59e0b55', dash:'dot', width:1.5 },
-      name: `Avg cluster (${avgClusterSize.toFixed(0)} papers)`,
-      hoverinfo: 'name',
+      name:`Avg cluster (${avgClusterSize.toFixed(0)} papers)`, hoverinfo:'name',
     },
   ], {
     paper_bgcolor:'#1e1e2e', plot_bgcolor:'#13131f',
     font:{ color:'#94a3b8', size:11 },
-    xaxis:{ title:'Paper Count in Cluster →', gridcolor:'#2a2a3e', zeroline:false },
-    yaxis:{ title:'↑ Citation Traction (avg citations)', gridcolor:'#2a2a3e', zeroline:false },
-    legend:{ bgcolor:'transparent', font:{ size:10 } },
+    xaxis:{ title:'Papers in Cluster →', gridcolor:'#2a2a3e', zeroline:false },
+    yaxis:{ title:'↑ Citation Traction', gridcolor:'#2a2a3e', zeroline:false },
+    legend:{ bgcolor:'transparent', font:{size:10} },
     margin:{ t:20, b:55, l:65, r:20 },
-    annotations:[{
-      x:0.01, y:0.99, xref:'paper', yref:'paper', showarrow:false,
-      text:'🔭 Top-left = research gap with real interest',
-      font:{ color:'#4ade80', size:10 }, align:'left',
-    }],
+    annotations:[{ x:0.01, y:0.99, xref:'paper', yref:'paper', showarrow:false,
+      text:'🔭 Top-left = gap with real interest', font:{color:'#4ade80',size:10}, align:'left' }],
   }, { responsive:true, displayModeBar:false });
 }
 
