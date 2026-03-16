@@ -481,11 +481,19 @@ async def get_funnel(
         year_list = list(range(year_min, year_max + 1))
 
     # ── Global ICLR estimates (for Sankey) ───────────────────────────────────
+    # Sources: OpenReview stats + published acceptance-rate figures
     ICLR_ESTIMATES = {
-        2024: {"total": 2665, "oral": 83,  "spotlight": 156, "poster": 591, "reject": 1835},
-        2025: {"total": 7993, "oral": 218, "spotlight": 447, "poster": 1095, "reject": 6233},
-        2026: {"total": 9200, "oral": 250, "spotlight": 500, "poster": 1200, "reject": 7250},
+        2020: {"total": 2594,  "oral": 48,  "spotlight": 108, "poster": 531,  "reject": 1907},
+        2021: {"total": 2997,  "oral": 53,  "spotlight": 114, "poster": 693,  "reject": 2137},
+        2022: {"total": 3391,  "oral": 54,  "spotlight": 176, "poster": 865,  "reject": 2296},
+        2023: {"total": 4966,  "oral": 81,  "spotlight": 155, "poster": 1338, "reject": 3392},
+        2024: {"total": 7262,  "oral": 85,  "spotlight": 182, "poster": 1991, "reject": 5004},
+        2025: {"total": 9500,  "oral": 218, "spotlight": 447, "poster": 1950, "reject": 6885},
+        2026: {"total": 11000, "oral": 270, "spotlight": 550, "poster": 2400, "reject": 7780},
     }
+
+    def _pct(n: int, total: int) -> float:
+        return round(n / total * 100, 1) if total else 0.0
 
     nodes = [{"id": "Submissions", "label": "All Submissions"}]
     links = []
@@ -494,19 +502,32 @@ async def get_funnel(
     for year in year_list:
         if year not in ICLR_ESTIMATES:
             continue
-        est = ICLR_ESTIMATES[year]
+        est    = ICLR_ESTIMATES[year]
+        total  = est["total"]
+        accept = est["oral"] + est["spotlight"] + est["poster"]
+
+        # Augment with percentage fields consumed by the frontend
+        est_with_pct = {
+            **est,
+            "pct_oral":      _pct(est["oral"],      total),
+            "pct_spotlight": _pct(est["spotlight"],  total),
+            "pct_poster":    _pct(est["poster"],     total),
+            "pct_reject":    _pct(est["reject"],     total),
+            "pct_accept":    _pct(accept,            total),
+        }
+
         year_node = f"ICLR {year}"
-        nodes.append({"id": year_node, "label": year_node})
-        links.append({"source": "Submissions", "target": year_node, "value": est["total"]})
+        nodes.append({"id": year_node, "label": f"ICLR {year} ({total:,})"})
+        links.append({"source": "Submissions", "target": year_node, "value": total})
         oral_node = f"{year} Oral"
         spot_node = f"{year} Spotlight"
         post_node = f"{year} Poster"
         rej_node  = f"{year} Rejected"
         nodes += [
-            {"id": oral_node, "label": f"Oral ({est['oral']})"},
-            {"id": spot_node, "label": f"Spotlight ({est['spotlight']})"},
-            {"id": post_node, "label": f"Poster ({est['poster']})"},
-            {"id": rej_node,  "label": f"Rejected ({est['reject']})"},
+            {"id": oral_node, "label": f"Oral — {est_with_pct['pct_oral']}%"},
+            {"id": spot_node, "label": f"Spotlight — {est_with_pct['pct_spotlight']}%"},
+            {"id": post_node, "label": f"Poster — {est_with_pct['pct_poster']}%"},
+            {"id": rej_node,  "label": f"Rejected — {est_with_pct['pct_reject']}%"},
         ]
         links += [
             {"source": year_node, "target": oral_node, "value": est["oral"]},
@@ -514,7 +535,7 @@ async def get_funnel(
             {"source": year_node, "target": post_node, "value": est["poster"]},
             {"source": year_node, "target": rej_node,  "value": est["reject"]},
         ]
-        year_breakdown[year] = est
+        year_breakdown[year] = est_with_pct
 
     # ── Per-cluster breakdown from actual fetched papers ─────────────────────
     conf_list  = [c.strip() for c in conferences.split(",") if c.strip()]

@@ -267,7 +267,9 @@
       <p class="text-xs text-slate-500 mb-4">Global ICLR submission → tier flow (all areas). Estimated from OpenReview historical data.</p>
       <div id="funnelChart" style="height:460px"></div>
     </div>
-    <div class="grid grid-cols-3 gap-4 mt-4" id="funnelStats"></div>
+    <!-- Acceptance rate trend bar -->
+    <div id="funnelRateChart" class="mt-5" style="height:110px"></div>
+    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 mt-4" id="funnelStats"></div>
 
     <!-- Per-area breakdown -->
     <div class="card p-5 mt-6">
@@ -941,22 +943,83 @@ function renderFunnel(data) {
     margin:{t:20,b:20,l:20,r:20},
   }, { responsive:true, displayModeBar:false });
 
-  // Year stat cards
-  $('funnelStats').innerHTML = Object.entries(year_breakdown).map(([yr, est]) => `
+  // ── Acceptance-rate trend bars ──────────────────────────────────────────
+  const yrEntries = Object.entries(year_breakdown).sort((a,b) => a[0]-b[0]);
+  Plotly.newPlot('funnelRateChart', [
+    { type:'bar', name:'Rejected',  x: yrEntries.map(([y])=>y),
+      y: yrEntries.map(([,e])=>e.pct_reject),
+      marker:{ color:'#f87171' },
+      hovertemplate:'<b>ICLR %{x}</b><br>Rejected: %{y:.1f}%<extra></extra>' },
+    { type:'bar', name:'Poster',    x: yrEntries.map(([y])=>y),
+      y: yrEntries.map(([,e])=>e.pct_poster),
+      marker:{ color:'#22d3ee' },
+      hovertemplate:'<b>ICLR %{x}</b><br>Poster: %{y:.1f}%<extra></extra>' },
+    { type:'bar', name:'Spotlight', x: yrEntries.map(([y])=>y),
+      y: yrEntries.map(([,e])=>e.pct_spotlight),
+      marker:{ color:'#fb923c' },
+      hovertemplate:'<b>ICLR %{x}</b><br>Spotlight: %{y:.1f}%<extra></extra>' },
+    { type:'bar', name:'Oral',      x: yrEntries.map(([y])=>y),
+      y: yrEntries.map(([,e])=>e.pct_oral),
+      marker:{ color:'#a78bfa' },
+      hovertemplate:'<b>ICLR %{x}</b><br>Oral: %{y:.1f}%<extra></extra>' },
+  ], {
+    barmode:'stack',
+    paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:10 },
+    xaxis:{ gridcolor:'#2a2a3e', zeroline:false, tickfont:{size:11} },
+    yaxis:{ gridcolor:'#2a2a3e', zeroline:false, range:[0,105], title:'%', titlefont:{size:10} },
+    legend:{ orientation:'h', x:0, y:1.35, bgcolor:'transparent', font:{size:10} },
+    margin:{ t:35, b:30, l:45, r:10 },
+    bargap: 0.15,
+  }, { responsive:true, displayModeBar:false });
+
+  // ── Year stat cards (percentage-first) ───────────────────────────────────
+  $('funnelStats').innerHTML = yrEntries.map(([yr, est]) => {
+    const accept_pct = est.pct_accept ?? (((est.oral+est.spotlight+est.poster)/est.total)*100).toFixed(1);
+    // mini stacked bar widths
+    const bOral = est.pct_oral ?? 0;
+    const bSpot = est.pct_spotlight ?? 0;
+    const bPost = est.pct_poster ?? 0;
+    const bRej  = est.pct_reject ?? 0;
+    return `
     <div class="card p-4">
-      <h3 class="font-semibold text-white mb-2">ICLR ${yr}</h3>
-      <div class="space-y-1 text-xs">
-        <div class="flex justify-between"><span class="text-slate-400">Submissions</span><span class="text-white font-medium">${est.total.toLocaleString()}</span></div>
-        <div class="flex justify-between"><span class="pill-oral pill">Oral</span><span class="text-white">${est.oral}</span></div>
-        <div class="flex justify-between"><span class="pill-spotlight pill">Spotlight</span><span class="text-white">${est.spotlight}</span></div>
-        <div class="flex justify-between"><span class="pill-poster pill">Poster</span><span class="text-white">${est.poster}</span></div>
-        <div class="flex justify-between border-t border-slate-700 pt-1 mt-1">
-          <span class="text-slate-400">Accept %</span>
-          <span class="text-green-400 font-medium">${(((est.oral+est.spotlight+est.poster)/est.total)*100).toFixed(1)}%</span>
-        </div>
-        <div class="flex justify-between"><span class="text-slate-400">Rejected</span><span class="text-red-400">${est.reject.toLocaleString()}</span></div>
+      <div class="flex justify-between items-baseline mb-3">
+        <h3 class="font-semibold text-white">ICLR ${yr}</h3>
+        <span class="text-xs text-slate-500">${est.total.toLocaleString()} sub.</span>
       </div>
-    </div>`).join('');
+      <!-- Big acceptance rate -->
+      <div class="text-center mb-3">
+        <div class="text-3xl font-bold text-green-400">${accept_pct}%</div>
+        <div class="text-xs text-slate-500 mt-0.5">acceptance rate</div>
+      </div>
+      <!-- Stacked % bar -->
+      <div class="flex rounded overflow-hidden h-2.5 mb-3" title="Oral / Spotlight / Poster / Rejected">
+        <div style="width:${bOral}%;background:#a78bfa" title="Oral ${bOral}%"></div>
+        <div style="width:${bSpot}%;background:#fb923c" title="Spotlight ${bSpot}%"></div>
+        <div style="width:${bPost}%;background:#22d3ee" title="Poster ${bPost}%"></div>
+        <div style="width:${bRej}%;background:#f87171" title="Rejected ${bRej}%"></div>
+      </div>
+      <!-- Breakdown rows -->
+      <div class="space-y-1.5 text-xs">
+        <div class="flex justify-between items-center">
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm flex-shrink-0" style="background:#a78bfa"></span><span class="text-slate-400">Oral</span></span>
+          <span class="tabular-nums"><span class="font-semibold" style="color:#a78bfa">${bOral}%</span> <span class="text-slate-600">(${est.oral})</span></span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm flex-shrink-0" style="background:#fb923c"></span><span class="text-slate-400">Spotlight</span></span>
+          <span class="tabular-nums"><span class="font-semibold" style="color:#fb923c">${bSpot}%</span> <span class="text-slate-600">(${est.spotlight})</span></span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm flex-shrink-0" style="background:#22d3ee"></span><span class="text-slate-400">Poster</span></span>
+          <span class="tabular-nums"><span class="font-semibold" style="color:#22d3ee">${bPost}%</span> <span class="text-slate-600">(${est.poster})</span></span>
+        </div>
+        <div class="flex justify-between items-center border-t border-slate-700 pt-1.5 mt-1.5">
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm flex-shrink-0" style="background:#f87171"></span><span class="text-slate-400">Rejected</span></span>
+          <span class="tabular-nums"><span class="font-semibold text-red-400">${bRej}%</span> <span class="text-slate-600">(${est.reject.toLocaleString()})</span></span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 
   // Area breakdown
   renderAreaBreakdown(data);
