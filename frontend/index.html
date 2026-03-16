@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ConferencePapers — Agents for Productivity @ ICLR</title>
+
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          brand: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+          surface: { 800: '#1e1e2e', 900: '#13131f', 700: '#2a2a3e' },
+        }
+      }
+    }
+  }
+</script>
+
+<!-- Plotly.js -->
+<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+
+<!-- Marked (markdown parser for abstracts) -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+<style>
+  :root { --brand: #6366f1; }
+  body { background: #0f0f1a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+  .card { background: #1e1e2e; border: 1px solid #2a2a3e; border-radius: 12px; }
+  .pill { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .pill-oral     { background:#7c3aed22; color:#a78bfa; border:1px solid #7c3aed44; }
+  .pill-spotlight{ background:#d9770622; color:#fb923c; border:1px solid #d9770644; }
+  .pill-poster   { background:#06596322; color:#22d3ee; border:1px solid #06596344; }
+  .pill-arxiv    { background:#15803d22; color:#4ade80; border:1px solid #15803d44; }
+  .score-bar { height:4px; border-radius:4px; background:#2a2a3e; overflow:hidden; }
+  .score-fill { height:100%; border-radius:4px; background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+  .nav-tab { padding: 6px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; color: #94a3b8; }
+  .nav-tab:hover, .nav-tab.active { background: #6366f133; color: #a5b4fc; }
+  .modal-overlay { position:fixed; inset:0; background:#00000088; backdrop-filter:blur(4px); z-index:50; display:flex; align-items:center; justify-content:center; }
+  .modal-box { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:16px; width:min(720px,95vw); max-height:90vh; overflow-y:auto; padding:28px; }
+  .tag { display:inline-block; background:#1e3a5f; color:#7dd3fc; border-radius:6px; padding:2px 8px; font-size:11px; margin:2px; }
+  .flaw-tag { display:inline-block; background:#450a0a; color:#fca5a5; border-radius:6px; padding:2px 8px; font-size:11px; margin:2px; }
+  input, textarea, select { background:#13131f; border:1px solid #2a2a3e; border-radius:8px; color:#e2e8f0; padding:8px 12px; width:100%; outline:none; }
+  input:focus, textarea:focus { border-color:#6366f1; box-shadow:0 0 0 2px #6366f122; }
+  .btn-primary { background:#6366f1; color:#fff; border-radius:8px; padding:8px 20px; font-weight:600; cursor:pointer; border:none; transition:background .15s; }
+  .btn-primary:hover { background:#4f46e5; }
+  .btn-ghost { background:transparent; color:#94a3b8; border:1px solid #2a2a3e; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; transition:all .15s; }
+  .btn-ghost:hover { background:#2a2a3e; color:#e2e8f0; }
+  .stat-card { background:#13131f; border:1px solid #2a2a3e; border-radius:10px; padding:16px; }
+  .white-space-card { background:#0f2312; border:1px solid #166534; border-radius:10px; padding:12px 16px; }
+  ::-webkit-scrollbar { width:6px; } ::-webkit-scrollbar-track { background:#13131f; }
+  ::-webkit-scrollbar-thumb { background:#2a2a3e; border-radius:3px; }
+  .loading-pulse { animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+  .cluster-badge { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .trend-up   { color:#4ade80; } .trend-down { color:#f87171; }
+  #loadingBanner {
+    position: sticky; top: 56px; z-index: 30;
+    background: linear-gradient(90deg, #4338ca, #6366f1, #4338ca);
+    background-size: 200% 100%;
+    animation: bannerShimmer 1.6s linear infinite;
+    color: #e2e8f0; font-size: 13px; font-weight: 500;
+    padding: 8px 20px; text-align: center; letter-spacing: 0.02em;
+    display: none;
+  }
+  #loadingBanner.visible { display: block; }
+  @keyframes bannerShimmer { 0%{background-position:0% 0} 100%{background-position:200% 0} }
+  #toast { position:fixed; bottom:24px; right:24px; background:#1e1e2e; border:1px solid #6366f1; border-radius:10px; padding:12px 20px; z-index:100; font-size:13px; opacity:0; transition:opacity .3s; pointer-events:none; }
+  #toast.show { opacity:1; }
+
+  /* ── Dual range slider ─────────────────────────────────── */
+  .year-range-wrapper { position:relative; height:34px; width:100%; }
+  .range-track-bg  { position:absolute; top:50%; transform:translateY(-50%); left:0; right:0; height:4px; border-radius:4px; background:#2a2a3e; pointer-events:none; }
+  .range-track-fill{ position:absolute; top:50%; transform:translateY(-50%); height:4px; border-radius:4px; background:linear-gradient(90deg,#6366f1,#8b5cf6); pointer-events:none; }
+  .year-range-wrapper input[type=range] { position:absolute; width:100%; height:4px; top:50%; transform:translateY(-50%); -webkit-appearance:none; pointer-events:none; background:transparent; border:none; padding:0; margin:0; outline:none; }
+  .year-range-wrapper input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; pointer-events:all; width:16px; height:16px; border-radius:50%; background:#6366f1; cursor:pointer; border:2px solid #0f0f1a; box-shadow:0 0 0 2px #6366f155; }
+  .year-range-wrapper input[type=range]::-moz-range-thumb { pointer-events:all; width:14px; height:14px; border-radius:50%; background:#6366f1; cursor:pointer; border:2px solid #0f0f1a; box-shadow:0 0 0 2px #6366f155; }
+
+  /* ── Conference chips ──────────────────────────────────── */
+  .conf-label { display:inline-flex; align-items:center; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid #2a2a3e; color:#94a3b8; background:#13131f; user-select:none; transition:all .15s; }
+  .conf-label.active { background:#6366f133; color:#a5b4fc; border-color:#6366f155; }
+
+  /* ── Tier chips (header) ───────────────────────────────── */
+  .tier-chip { padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500; transition:all .15s; color:#94a3b8; border:1px solid transparent; background:transparent; }
+  .tier-chip:hover, .tier-chip.active { background:#6366f133; color:#a5b4fc; border-color:#6366f155; }
+
+  /* ── Config panel ──────────────────────────────────────── */
+  #configPanel { background:#0b0b16; }
+  .config-transition { transition: max-height .25s ease, opacity .25s ease; }
+
+  /* ── Cluster panel ─────────────────────────────────────── */
+  .cluster-row:hover .cluster-row-label { color:#e2e8f0; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ═══════════════════════════════════════════════════════════════ HEADER -->
+<div class="sticky top-0 z-40" style="background:#0f0f1a;border-bottom:1px solid #1e2030">
+
+  <!-- Row 1: logo + active filter summary + tier chips + actions -->
+  <header class="px-6 py-2.5 flex items-center gap-3 flex-wrap" style="backdrop-filter:blur(12px)">
+    <div class="flex items-center gap-2 flex-shrink-0">
+      <div class="w-7 h-7 rounded-lg flex items-center justify-center text-white text-sm font-bold" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">CP</div>
+      <span class="font-semibold text-sm text-white">ConferencePapers</span>
+    </div>
+
+    <!-- Active filter summary (click to expand) -->
+    <button id="configToggle" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 hover:border-indigo-500 transition text-xs" style="background:#13131f">
+      <span class="text-indigo-300 font-semibold" id="activeConfsLabel">ICLR</span>
+      <span class="text-slate-500">·</span>
+      <span class="text-slate-300" id="yearRangeLabel">2024 – 2026</span>
+      <span class="text-slate-500">·</span>
+      <span class="text-slate-400 max-w-36 truncate" id="activeTopicLabel">Agents for Productivity</span>
+      <span class="text-slate-600 ml-1">⚙</span>
+    </button>
+
+    <!-- Tier multi-select chips -->
+    <div class="flex items-center gap-1 flex-wrap" id="tierChipsRow">
+      <button class="tier-chip active" id="tierAll" data-tier="all">All tiers</button>
+      <button class="tier-chip" data-tier="oral">⬤ Oral</button>
+      <button class="tier-chip" data-tier="spotlight">⬤ Spotlight</button>
+      <button class="tier-chip" data-tier="poster">⬤ Poster</button>
+      <button class="tier-chip" data-tier="arxiv">⬤ arXiv</button>
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <button id="refreshBtn" class="btn-ghost text-xs px-3 py-1.5">↺ Refresh</button>
+      <div id="statusDot" class="w-2 h-2 rounded-full bg-yellow-400 loading-pulse" title="Loading data..."></div>
+    </div>
+  </header>
+
+  <!-- Row 2: collapsible config panel -->
+  <div id="configPanel" class="hidden border-t border-slate-800 px-6 py-4">
+    <div class="flex flex-wrap gap-6 items-end max-w-5xl">
+
+      <!-- Year dual range slider -->
+      <div class="flex-1" style="min-width:220px">
+        <label class="text-xs text-slate-400 mb-3 block font-medium">Year Range</label>
+        <div class="year-range-wrapper">
+          <div class="range-track-bg"></div>
+          <div id="rangeTrackFill" class="range-track-fill"></div>
+          <input type="range" id="yearMinSlider" min="2020" max="2027" value="2024" step="1">
+          <input type="range" id="yearMaxSlider" min="2020" max="2027" value="2026" step="1">
+        </div>
+        <div class="flex justify-between text-xs text-slate-600 mt-2">
+          <span>2020</span>
+          <span class="text-indigo-300 font-semibold" id="yearRangeLabelFull">2024 – 2026</span>
+          <span>2027</span>
+        </div>
+      </div>
+
+      <!-- Conferences -->
+      <div class="flex-1" style="min-width:200px">
+        <label class="text-xs text-slate-400 mb-2 block font-medium">Conferences</label>
+        <div class="flex flex-wrap gap-1.5" id="confChips">
+          <label class="conf-label active"><input type="checkbox" class="conf-cb" value="ICLR" checked hidden>ICLR</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="ICML" hidden>ICML</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="NeurIPS" hidden>NeurIPS</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="AAAI" hidden>AAAI</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="ACL" hidden>ACL</label>
+          <label class="conf-label"><input type="checkbox" class="conf-cb" value="EMNLP" hidden>EMNLP</label>
+        </div>
+      </div>
+
+      <!-- Topic query -->
+      <div class="flex-1" style="min-width:260px">
+        <label class="text-xs text-slate-400 mb-2 block font-medium">Research Topic / Query</label>
+        <div class="flex gap-2">
+          <input type="text" id="topicInput" value="Agents for Productivity" placeholder="e.g. Agents for Productivity" class="text-sm flex-1" style="width:auto">
+          <button id="applyTopicBtn" class="btn-primary text-xs px-4 py-2 flex-shrink-0">Apply</button>
+        </div>
+        <p class="text-xs text-slate-600 mt-1">Press Enter or click Apply to search. Changing topic triggers a fresh API fetch.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ NAV TABS -->
+<div class="flex items-center gap-1 px-6 py-2 border-b border-slate-800 overflow-x-auto">
+  <button class="nav-tab active page-tab" data-page="overview">📊 Overview</button>
+  <button class="nav-tab page-tab" data-page="landscape">🗺 Landscape Map</button>
+  <button class="nav-tab page-tab" data-page="funnel">🔻 Prestige Funnel</button>
+  <button class="nav-tab page-tab" data-page="papers">📄 Papers</button>
+  <button class="nav-tab page-tab" data-page="trends">📈 Trends</button>
+  <button class="nav-tab page-tab" data-page="whitespace">⬜ White Spaces</button>
+
+  <button class="nav-tab page-tab" data-page="cache">💾 Cache</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ MAIN -->
+<main class="px-6 py-6 max-w-screen-2xl mx-auto">
+
+<!-- Loading banner -->
+<div id="loadingBanner">
+  <span id="loadingMsg">⏳ Loading results…</span>
+</div>
+
+  <!-- ── OVERVIEW PAGE ─────────────────────────────────────────── -->
+  <div id="page-overview" class="page-content">
+    <!-- Stats row -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="statsRow">
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Total Papers</div><div id="stat-total" class="text-2xl font-bold text-white loading-pulse">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg Citations</div><div id="stat-citations" class="text-2xl font-bold text-white loading-pulse">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Avg ICLR Flavor</div><div id="stat-flavor" class="text-2xl font-bold text-white loading-pulse">—</div></div>
+      <div class="stat-card"><div class="text-xs text-slate-500 mb-1">Top Cluster</div><div id="stat-cluster" class="text-sm font-semibold text-indigo-400 loading-pulse">—</div></div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Top papers -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-white mb-4 flex items-center gap-2">🚀 Top Impact Papers <span class="text-xs text-slate-500 font-normal">by Impact-Niche Score</span></h2>
+        <div id="topPapersList" class="space-y-3"></div>
+      </div>
+      <!-- Tier breakdown mini chart -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-white mb-4">🎯 Acceptance Tier Breakdown</h2>
+        <div id="tierBreakdownChart" style="height:260px"></div>
+      </div>
+      <!-- Key themes -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-white mb-4">🏷 Key Themes (Cluster Distribution)</h2>
+        <div id="clusterChart" style="height:260px"></div>
+      </div>
+      <!-- ICLR Flavor scatter -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-white mb-4">⚗️ ICLR Flavor vs. Citation Count</h2>
+        <div id="flavorScatterOverview" style="height:260px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── LANDSCAPE MAP PAGE ────────────────────────────────────── -->
+  <div id="page-landscape" class="page-content hidden">
+    <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
+      <!-- Map -->
+      <div class="card p-5 xl:col-span-3">
+        <h2 class="font-semibold text-white mb-1">🗺 Research Landscape Map</h2>
+        <p class="text-xs text-slate-500 mb-4">2D UMAP embedding of paper abstracts. Colour = topic cluster. Size = citation count. <strong class="text-slate-400">Click a point</strong> to deep-read, <strong class="text-slate-400">click a cluster name</strong> in the legend or sidebar to list all papers in it.</p>
+        <div id="landscapeChart" style="height:560px"></div>
+      </div>
+      <!-- Cluster sidebar -->
+      <div class="card p-4">
+        <h3 class="font-semibold text-white mb-3 text-sm">Topic Clusters</h3>
+        <p class="text-xs text-slate-500 mb-3">Click a cluster to see all its papers ↓</p>
+        <div id="clusterLegendList" class="space-y-1"></div>
+      </div>
+    </div>
+    <!-- Cluster drill-down panel -->
+    <div id="clusterPanel" class="card p-5 mt-4 hidden">
+      <div class="flex items-center justify-between mb-4">
+        <h3 id="clusterPanelTitle" class="font-semibold text-white"></h3>
+        <button onclick="document.getElementById('clusterPanel').classList.add('hidden')" class="text-slate-500 hover:text-white text-lg leading-none">✕</button>
+      </div>
+      <div id="clusterPapersList" class="space-y-2 max-h-80 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- ── PRESTIGE FUNNEL PAGE ──────────────────────────────────── -->
+  <div id="page-funnel" class="page-content hidden">
+    <!-- Global Sankey -->
+    <div class="card p-5">
+      <h2 class="font-semibold text-white mb-1">🔻 Prestige Funnel — Overall</h2>
+      <p class="text-xs text-slate-500 mb-4">Global ICLR submission → tier flow (all areas). Estimated from OpenReview historical data.</p>
+      <div id="funnelChart" style="height:460px"></div>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mt-4" id="funnelStats"></div>
+
+    <!-- Per-area breakdown -->
+    <div class="card p-5 mt-6">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h2 class="font-semibold text-white">📂 Tier Breakdown by Research Area</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Based on accepted papers in your selected topic &amp; year range. Clusters are derived from dense embeddings.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500">Sort by:</span>
+          <select id="areaFunnelSort" class="text-xs" style="width:auto;padding:4px 8px">
+            <option value="total">Total papers</option>
+            <option value="oral_pct">% Oral</option>
+            <option value="spotlight_pct">% Spotlight</option>
+            <option value="poster_pct">% Poster</option>
+          </select>
+        </div>
+      </div>
+      <!-- Stacked normalized bar chart -->
+      <div id="areaFunnelChart" style="height:380px"></div>
+      <!-- Table -->
+      <div class="mt-5 overflow-x-auto">
+        <table class="w-full text-xs" id="areaFunnelTable">
+          <thead>
+            <tr class="text-slate-500 border-b border-slate-700 text-left">
+              <th class="pb-2 pr-4 font-medium">Research Area</th>
+              <th class="pb-2 pr-3 text-center font-medium">Total</th>
+              <th class="pb-2 pr-3 text-center font-medium" style="color:#a78bfa">Oral</th>
+              <th class="pb-2 pr-3 text-center font-medium" style="color:#fb923c">Spotlight</th>
+              <th class="pb-2 pr-3 text-center font-medium" style="color:#22d3ee">Poster</th>
+              <th class="pb-2 pr-3 text-center font-medium" style="color:#a78bfa">% Oral</th>
+              <th class="pb-2 pr-3 text-center font-medium" style="color:#fb923c">% Spotlight</th>
+              <th class="pb-2 text-center font-medium" style="color:#22d3ee">% Poster</th>
+            </tr>
+          </thead>
+          <tbody id="areaFunnelTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Per-area per-year trend -->
+    <div class="card p-5 mt-6">
+      <h2 class="font-semibold text-white mb-1">📅 Area × Year Heatmap</h2>
+      <p class="text-xs text-slate-500 mb-4">Number of accepted papers per research area per year.</p>
+      <div id="areaYearHeatmap" style="height:340px"></div>
+    </div>
+  </div>
+
+  <!-- ── PAPERS PAGE ───────────────────────────────────────────── -->
+  <div id="page-papers" class="page-content hidden">
+    <!-- Search + sort bar -->
+    <div class="flex flex-wrap gap-3 mb-3 items-center">
+      <div class="flex items-center gap-1 relative">
+        <input id="paperSearch" type="text" placeholder="🔍 Search… or press Enter for AI search"
+               class="w-80 text-sm" />
+        <button id="semanticSearchBtn"
+                title="AI semantic search (RAG-Fusion — generates query variants + dense retrieval)"
+                class="btn-ghost text-xs px-2 py-1 leading-none flex items-center gap-1 whitespace-nowrap">
+          <span id="searchBtnLabel">⚡ AI Search</span>
+        </button>
+      </div>
+      <select id="sortSelect" class="text-sm w-48">
+        <option value="relevance">Sort: Relevance</option>
+        <option value="impact">Sort: Impact-Niche Score</option>
+        <option value="citation">Sort: Citation Count</option>
+        <option value="iclr_flavor">Sort: ICLR Flavor</option>
+        <option value="semantic">Sort: Semantic Score</option>
+      </select>
+      <span id="paperCount" class="text-xs text-slate-400 ml-auto"></span>
+    </div>
+    <!-- Semantic mode banner: expanded query chips -->
+    <div id="semanticModeRow" class="hidden mb-4 p-3 rounded-xl bg-indigo-950/40 border border-indigo-700/30">
+      <div class="flex flex-wrap items-start gap-2">
+        <span class="text-xs text-indigo-400 font-semibold mt-0.5">🧠 AI Search — also queried:</span>
+        <div id="expandedQueriesChips" class="flex flex-wrap gap-1.5 flex-1"></div>
+        <button id="clearSemanticBtn" class="text-xs text-slate-500 hover:text-red-400 transition ml-auto flex-shrink-0"
+                title="Return to normal browsing">✕ Clear</button>
+      </div>
+    </div>
+    <div id="papersGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+    <div class="text-center mt-6">
+      <button id="loadMoreBtn" class="btn-ghost hidden">Load more papers</button>
+    </div>
+  </div>
+
+  <!-- ── TRENDS PAGE ───────────────────────────────────────────── -->
+  <div id="page-trends" class="page-content hidden">
+    <div class="card p-5">
+      <h2 class="font-semibold text-white mb-1">📈 Research Trends 2024–2026</h2>
+      <p class="text-xs text-slate-500 mb-4">Topic frequency across ICLR years for Agents for Productivity papers.</p>
+      <div id="trendsChart" style="height:420px"></div>
+    </div>
+    <div id="trendInsights" class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4"></div>
+  </div>
+
+  <!-- ── WHITE SPACES PAGE ────────────────────────────────────── -->
+  <div id="page-whitespace" class="page-content hidden">
+    <div class="mb-4">
+      <h2 class="font-semibold text-white text-lg">⬜ White Space Analysis</h2>
+      <p class="text-sm text-slate-400 mt-1">Clusters where industry GitHub traction is high but accepted paper density is low — the gap between builders and theorists.</p>
+    </div>
+    <div id="whiteSpaceCards" class="space-y-3"></div>
+    <div class="card p-5 mt-6">
+      <h3 class="font-semibold text-white mb-3">Impact-Niche Score Quadrant</h3>
+      <p class="text-xs text-slate-500 mb-3">Score = (Citation Velocity × GitHub Stars) / Accepted Paper Density. Top-left = White Space opportunities.</p>
+      <div id="quadrantChart" style="height:400px"></div>
+    </div>
+  </div>
+
+  
+
+  <!-- ── CACHE PAGE ─────────────────────────────────────────── -->
+  <div id="page-cache" class="page-content hidden">
+    <!-- Header bar -->
+    <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+      <div>
+        <h2 class="font-semibold text-white text-lg">💾 Query Cache</h2>
+        <p class="text-sm text-slate-400 mt-0.5">Each (conference × year × topic) query is persisted as an Obsidian <code class="text-indigo-300">.md</code> in <code class="text-indigo-300">cache/</code>.</p>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="loadCacheList()" class="btn-ghost text-xs px-3 py-1.5">↺ Refresh</button>
+        <button onclick="invalidateAllCache()" class="btn-ghost text-xs px-3 py-1.5" style="color:#f87171;border-color:#7f1d1d">🗑 Clear all</button>
+      </div>
+    </div>
+    <!-- Summary stats bar -->
+    <div id="cacheInfoCard" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      <div class="loading-pulse text-slate-600 text-xs col-span-4">Loading cache info…</div>
+    </div>
+    <!-- Entry cards -->
+    <div id="cacheEntriesTable" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div class="loading-pulse text-slate-600 text-xs">Loading entries…</div>
+    </div>
+    <!-- Raw viewer -->
+    <div id="cacheRawViewer" class="card p-4 mt-5 hidden">
+      <div class="flex justify-between items-center mb-2">
+        <h3 class="text-sm font-semibold text-white">📄 Raw cache file</h3>
+        <button onclick="$('cacheRawViewer').classList.add('hidden')" class="text-slate-500 hover:text-white text-sm">✕ Close</button>
+      </div>
+      <pre id="cacheRawContent" class="text-xs text-slate-300 overflow-auto max-h-96 bg-slate-900 rounded p-3"></pre>
+    </div>
+    <!-- How it works -->
+    <div class="card p-4 mt-5 text-sm text-slate-400">
+      <h3 class="text-white font-semibold mb-2">How it works</h3>
+      <div class="grid md:grid-cols-3 gap-3">
+        <div class="bg-slate-800 rounded-lg p-3"><div class="text-indigo-300 font-semibold text-xs mb-1">L1 — In-memory</div><p class="text-xs leading-relaxed">Served from Python dict. Zero disk I/O on repeat calls.</p></div>
+        <div class="bg-slate-800 rounded-lg p-3"><div class="text-indigo-300 font-semibold text-xs mb-1">L2 — Disk (.md)</div><p class="text-xs leading-relaxed">One <code>.md</code> per query. Parsed on next boot — no API call needed. Valid Obsidian notes.</p></div>
+        <div class="bg-slate-800 rounded-lg p-3"><div class="text-indigo-300 font-semibold text-xs mb-1">L3 — Live APIs</div><p class="text-xs leading-relaxed">OpenReview → arXiv → Semantic Scholar. Written back to L2.</p></div>
+      </div>
+      <p class="mt-3 text-xs">TTL: <code class="text-indigo-300">config.json → cache.ttl_days</code> (default 7 days).</p>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════ PAPER MODAL -->
+<div id="paperModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <button id="closeModal" class="float-right text-slate-500 hover:text-white text-xl leading-none">✕</button>
+    <div id="modalTierBadge" class="mb-3"></div>
+    <h2 id="modalTitle" class="text-lg font-bold text-white mb-2"></h2>
+    <p id="modalAuthors" class="text-xs text-slate-400 mb-4"></p>
+    <div class="grid grid-cols-3 gap-3 mb-4">
+      <div class="stat-card text-center"><div class="text-xs text-slate-500">Year</div><div id="modalYear" class="font-bold text-white"></div></div>
+      <div class="stat-card text-center"><div class="text-xs text-slate-500">Citations</div><div id="modalCitations" class="font-bold text-white"></div></div>
+      <div class="stat-card text-center"><div class="text-xs text-slate-500">ICLR Flavor</div><div id="modalFlavor" class="font-bold text-indigo-400"></div></div>
+    </div>
+    <!-- Score bars -->
+    <div class="space-y-2 mb-4">
+      <div class="flex items-center gap-2 text-xs"><span class="w-24 text-slate-400">Relevance</span><div class="score-bar flex-1"><div id="modalRelevanceBar" class="score-fill"></div></div><span id="modalRelevanceVal" class="w-10 text-right text-slate-300"></span></div>
+      <div class="flex items-center gap-2 text-xs"><span class="w-24 text-slate-400">Impact-Niche</span><div class="score-bar flex-1"><div id="modalImpactBar" class="score-fill" style="background:linear-gradient(90deg,#f59e0b,#ef4444)"></div></div><span id="modalImpactVal" class="w-10 text-right text-slate-300"></span></div>
+      <div class="flex items-center gap-2 text-xs"><span class="w-24 text-slate-400">ICLR Flavor</span><div class="score-bar flex-1"><div id="modalFlavorBar" class="score-fill" style="background:linear-gradient(90deg,#8b5cf6,#c084fc)"></div></div><span id="modalFlavorVal" class="w-10 text-right text-slate-300"></span></div>
+    </div>
+    <!-- Abstract -->
+    <h4 class="text-xs font-semibold text-slate-400 uppercase mb-1">Abstract</h4>
+    <p id="modalAbstract" class="text-sm text-slate-300 leading-relaxed mb-4 max-h-48 overflow-y-auto"></p>
+    <!-- Keywords & flaws -->
+    <div id="modalKeywords" class="mb-3"></div>
+    <div id="modalFlaws" class="mb-4"></div>
+    <!-- Reviewer stats -->
+    <div id="modalReviewerStats" class="mb-4"></div>
+    <!-- Links -->
+    <div class="flex gap-3 flex-wrap">
+      <a id="modalOpenreviewLink" href="#" target="_blank" class="btn-ghost text-xs">OpenReview ↗</a>
+      <a id="modalArxivLink" href="#" target="_blank" class="btn-ghost text-xs">arXiv ↗</a>
+      <a id="modalPdfLink" href="#" target="_blank" class="btn-ghost text-xs">PDF ↗</a>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ TOAST -->
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ SCRIPT -->
+<script>
+// ── Constants ───────────────────────────────────────────────────────────────
+const API = '';
+const CLUSTER_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899'];
+const TIER_COLORS = { oral:'#a78bfa', spotlight:'#fb923c', poster:'#22d3ee', arxiv:'#4ade80', rejected:'#f87171' };
+const YEAR_MIN_GLOBAL = 2020, YEAR_MAX_GLOBAL = 2027;
+
+// ── State ────────────────────────────────────────────────────────────────────
+let state = {
+  papers: [],
+  yearMin: 2024,
+  yearMax: 2026,
+  conferences: ['ICLR'],
+  topic: 'Agents for Productivity',
+  tier: 'all',
+  activePage: 'overview',
+  searchText: '',
+  sortBy: 'relevance',
+  paperOffset: 0,
+  PAGE_SIZE: 30,
+  semanticResults: null,    // null = normal mode; array = semantic mode
+  expandedQueries:  [],     // RAG-Fusion expanded query variants
+};
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const show = id => document.getElementById(id)?.classList.remove('hidden');
+const hide = id => document.getElementById(id)?.classList.add('hidden');
+
+function toast(msg, ms = 2500) {
+  const el = $('toast'); el.textContent = msg; el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), ms);
+}
+
+function tierPill(t) {
+  const map = { oral:'pill-oral', spotlight:'pill-spotlight', poster:'pill-poster', arxiv:'pill-arxiv' };
+  const labels = { oral:'Oral', spotlight:'Spotlight', poster:'Poster', arxiv:'arXiv', rejected:'Rejected' };
+  return `<span class="pill ${map[t]||''}">${labels[t]||t}</span>`;
+}
+
+function scoreColor(v) {
+  if (v >= 0.6) return '#4ade80';
+  if (v >= 0.35) return '#fb923c';
+  return '#f87171';
+}
+
+// ── API param builder — FIXED to use year_min/year_max ───────────────────────
+function apiQueryParams(extra = '') {
+  const base = `conferences=${encodeURIComponent(state.conferences.join(','))}`
+    + `&year_min=${state.yearMin}&year_max=${state.yearMax}`
+    + `&topic=${encodeURIComponent(state.topic)}`
+    + `&tier=${state.tier}`;
+  return extra ? `${base}&${extra}` : base;
+}
+
+async function apiFetch(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+// ── Filter change master handler ─────────────────────────────────────────────
+function _showLoading(msg) {
+  const b = $('loadingBanner');
+  $('loadingMsg').textContent = msg || '⏳ Loading results…';
+  b.classList.add('visible');
+}
+function _hideLoading() {
+  $('loadingBanner').classList.remove('visible');
+}
+
+// Called whenever yearMin/yearMax/conferences/topic/tier changes.
+// Invalidates all cached data, reloads papers, and reloads the active page view.
+function onFiltersChanged() {
+  // Sync label in header pill
+  $('activeConfsLabel').textContent   = state.conferences.join(', ');
+  $('activeTopicLabel').textContent   = state.topic;
+  const lo = state.yearMin, hi = state.yearMax;
+  $('yearRangeLabel').textContent     = lo === hi ? `${lo}` : `${lo} – ${hi}`;
+  $('yearRangeLabelFull').textContent = lo === hi ? `${lo}` : `${lo} – ${hi}`;
+
+  const confStr  = state.conferences.join(', ');
+  const yearStr  = lo === hi ? lo : `${lo}–${hi}`;
+  _showLoading(`⏳ Fetching ${confStr} ${yearStr} · “${state.topic}” — this may take a moment for uncached queries…`);
+
+  // Always fetch fresh — these are NOT cache-guarded any more
+  loadPapers();
+  const p = state.activePage;
+  if (p === 'landscape')  loadLandscape();
+  else if (p === 'funnel')    loadFunnel();
+  else if (p === 'trends')    loadTrends();
+  else if (p === 'whitespace') loadWhiteSpaces();
+}
+
+// ── Data loading — NO early-return cache guards ───────────────────────────────
+async function loadPapers() {
+  $('statusDot').className = 'w-2 h-2 rounded-full bg-yellow-400 loading-pulse';
+  try {
+    const data = await apiFetch(`/api/papers?${apiQueryParams(`sort_by=${state.sortBy}&limit=500`)}`);
+    state.papers = data.papers || [];
+    $('statusDot').className = 'w-2 h-2 rounded-full bg-green-400';
+    _hideLoading();
+    renderOverviewStats();
+    renderPapers();
+  } catch(e) {
+    $('statusDot').className = 'w-2 h-2 rounded-full bg-red-400';
+    _hideLoading();
+    toast(`⚠ Could not load papers: ${e.message}`);
+    renderEmptyState();
+  }
+}
+
+async function loadLandscape() {
+  try {
+    const data = await apiFetch(`/api/landscape?${apiQueryParams()}`);
+    renderLandscape(data);
+  } catch(e) { toast(`⚠ Landscape: ${e.message}`); }
+}
+
+async function loadFunnel() {
+  const years = [];
+  for (let y = state.yearMin; y <= state.yearMax; y++) years.push(y);
+  try {
+    const params = `years=${years.join(',')}&${apiQueryParams()}`;
+    const data = await apiFetch(`/api/funnel?${params}`);
+    renderFunnel(data);
+  } catch(e) { toast(`⚠ Funnel: ${e.message}`); }
+}
+
+async function loadTrends() {
+  try {
+    const data = await apiFetch(`/api/trends?${apiQueryParams()}`);
+    renderTrends(data);
+  } catch(e) { toast(`⚠ Trends: ${e.message}`); }
+}
+
+async function loadWhiteSpaces() {
+  try {
+    const data = await apiFetch(`/api/white_spaces?${apiQueryParams()}`);
+    renderWhiteSpaces(data);
+  } catch(e) { toast(`⚠ White spaces: ${e.message}`); }
+}
+
+// ── Year slider ────────────────────────────────────────────────────────────────
+function updateSliderTrack() {
+  const rawMin = parseInt($('yearMinSlider').value);
+  const rawMax = parseInt($('yearMaxSlider').value);
+  const lo = Math.min(rawMin, rawMax);
+  const hi = Math.max(rawMin, rawMax);
+  // Snap inputs so they reflect the clamped values
+  $('yearMinSlider').value = lo;
+  $('yearMaxSlider').value = hi;
+  state.yearMin = lo; state.yearMax = hi;
+  const span = YEAR_MAX_GLOBAL - YEAR_MIN_GLOBAL;
+  const leftPct  = ((lo - YEAR_MIN_GLOBAL) / span * 100).toFixed(1);
+  const rightPct = ((YEAR_MAX_GLOBAL - hi) / span * 100).toFixed(1);
+  const fill = $('rangeTrackFill');
+  if (fill) { fill.style.left = leftPct + '%'; fill.style.right = rightPct + '%'; }
+  const label = lo === hi ? `${lo}` : `${lo} – ${hi}`;
+  $('yearRangeLabelFull').textContent = label;
+  $('yearRangeLabel').textContent = label;
+  state.yearMin = lo; state.yearMax = hi;
+}
+
+$('yearMinSlider').addEventListener('input', updateSliderTrack);
+$('yearMaxSlider').addEventListener('input', updateSliderTrack);
+$('yearMinSlider').addEventListener('change', onFiltersChanged);
+$('yearMaxSlider').addEventListener('change', onFiltersChanged);
+
+// Initialise slider track position
+updateSliderTrack();
+
+// ── Conference chip toggles ────────────────────────────────────────────────────
+// Labels contain hidden checkboxes; native click → change event fires automatically.
+document.querySelectorAll('.conf-cb').forEach(cb => {
+  cb.addEventListener('change', () => {
+    const checked = Array.from(document.querySelectorAll('.conf-cb:checked')).map(c => c.value);
+    // At least one must be selected — default back to ICLR
+    if (checked.length === 0) {
+      document.querySelector('.conf-cb[value="ICLR"]').checked = true;
+    }
+    // Sync active class on all labels
+    document.querySelectorAll('.conf-label').forEach(lbl => {
+      const val = lbl.querySelector('.conf-cb').value;
+      const isChecked = document.querySelector(`.conf-cb[value="${val}"]`).checked;
+      lbl.classList.toggle('active', isChecked);
+    });
+    state.conferences = Array.from(document.querySelectorAll('.conf-cb:checked')).map(c => c.value);
+    if (!state.conferences.length) state.conferences = ['ICLR'];
+    onFiltersChanged();
+  });
+});
+
+// ── Topic input ────────────────────────────────────────────────────────────────
+function applyTopic() {
+  const val = $('topicInput').value.trim();
+  state.topic = val || 'Agents for Productivity';
+  $('activeTopicLabel').textContent = state.topic;
+  onFiltersChanged();
+}
+$('topicInput').addEventListener('keydown', e => { if (e.key === 'Enter') applyTopic(); });
+$('applyTopicBtn').addEventListener('click', applyTopic);
+
+// ── Config panel toggle ───────────────────────────────────────────────────────
+$('configToggle').addEventListener('click', () => $('configPanel').classList.toggle('hidden'));
+
+// ── Tier chips ────────────────────────────────────────────────────────────────
+const _allTierValues = ['oral','spotlight','poster','arxiv'];
+state.tiers = new Set(); // empty = all
+
+function _syncTierState() {
+  state.tier = state.tiers.size === 0 ? 'all' : [...state.tiers].join(',');
+  const allActive = state.tiers.size === 0;
+  $('tierAll').classList.toggle('active', allActive);
+  _allTierValues.forEach(t => {
+    const chip = document.querySelector(`.tier-chip[data-tier="${t}"]`);
+    if (chip) chip.classList.toggle('active', state.tiers.has(t));
+  });
+}
+
+document.querySelectorAll('.tier-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const t = btn.dataset.tier;
+    if (t === 'all') {
+      state.tiers.clear();
+    } else {
+      if (state.tiers.has(t)) state.tiers.delete(t); else state.tiers.add(t);
+      if (state.tiers.size === 0) state.tiers.clear();
+    }
+    _syncTierState();
+    onFiltersChanged();
+  });
+});
+_syncTierState();
+
+// ── Overview rendering ────────────────────────────────────────────────────────
+function renderOverviewStats() {
+  const papers = state.papers;
+  $('stat-total').textContent = papers.length;
+  $('stat-total').classList.remove('loading-pulse');
+
+  const avgCit = papers.length
+    ? Math.round(papers.reduce((s, p) => s + (p.citation_count||0), 0) / papers.length) : 0;
+  $('stat-citations').textContent = avgCit;
+  $('stat-citations').classList.remove('loading-pulse');
+
+  const avgFlavor = papers.length
+    ? (papers.reduce((s, p) => s + (p.iclr_flavor_score||0), 0) / papers.length).toFixed(2) : '—';
+  $('stat-flavor').textContent = avgFlavor;
+  $('stat-flavor').classList.remove('loading-pulse');
+
+  const cc = {};
+  papers.forEach(p => { cc[p.cluster_label] = (cc[p.cluster_label]||0)+1; });
+  const top = Object.entries(cc).sort((a,b)=>b[1]-a[1])[0];
+  $('stat-cluster').textContent = top ? top[0] : '—';
+  $('stat-cluster').classList.remove('loading-pulse');
+
+  renderTopPapers();
+  renderTierBreakdownChart();
+  renderClusterChart();
+  renderFlavorScatterOverview();
+}
+
+function renderTopPapers() {
+  const top = [...state.papers].sort((a,b) => b.impact_niche_score - a.impact_niche_score).slice(0,5);
+  $('topPapersList').innerHTML = top.map((p, i) => `
+    <div class="flex items-start gap-3 cursor-pointer hover:bg-slate-800 rounded-lg p-2 -mx-2 transition" onclick="openModal('${p.id}')">
+      <span class="text-slate-600 font-bold text-sm w-5 text-right flex-shrink-0">${i+1}</span>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm text-white font-medium leading-snug line-clamp-2">${p.title}</p>
+        <div class="flex items-center gap-2 mt-1">
+          ${tierPill(p.tier)}
+          <span class="text-xs text-slate-500">${p.year}</span>
+          <span class="text-xs text-slate-500">⭐ ${p.citation_count||0} cit.</span>
+          <span class="text-xs" style="color:${scoreColor(p.iclr_flavor_score||0)}">Flavor ${(p.iclr_flavor_score||0).toFixed(2)}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function renderTierBreakdownChart() {
+  const counts = {};
+  state.papers.forEach(p => { counts[p.tier] = (counts[p.tier]||0)+1; });
+  const entries = Object.entries(counts).filter(([,v])=>v>0);
+  Plotly.newPlot('tierBreakdownChart', [{
+    type: 'pie',
+    labels: entries.map(([k]) => k.charAt(0).toUpperCase()+k.slice(1)),
+    values: entries.map(([,v]) => v),
+    marker: { colors: entries.map(([k]) => TIER_COLORS[k]||'#94a3b8') },
+    textinfo: 'label+percent', hole: 0.45,
+  }], {
+    paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:11 }, margin:{t:10,b:10,l:10,r:10}, showlegend:false,
+  }, { responsive:true, displayModeBar:false });
+}
+
+function renderClusterChart() {
+  const cc = {};
+  state.papers.forEach(p => { cc[p.cluster_label] = (cc[p.cluster_label]||0)+1; });
+  const sorted = Object.entries(cc).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  Plotly.newPlot('clusterChart', [{
+    type: 'bar', orientation: 'h',
+    x: sorted.map(([,v])=>v).reverse(),
+    y: sorted.map(([k])=>k).reverse(),
+    marker: { color: sorted.map((_,i) => CLUSTER_COLORS[i % CLUSTER_COLORS.length]).reverse() },
+    customdata: sorted.map(([k])=>k).reverse(),
+    hovertemplate: '<b>%{y}</b>: %{x} papers<extra></extra>',
+  }], {
+    paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:11 },
+    margin:{ t:5, b:30, l:160, r:20 },
+    xaxis:{ gridcolor:'#2a2a3e', zeroline:false },
+    yaxis:{ gridcolor:'#2a2a3e' },
+  }, { responsive:true, displayModeBar:false });
+
+  // Clicking a bar → filter papers page to that cluster
+  $('clusterChart').on('plotly_click', d => {
+    const label = d.points[0]?.y;
+    if (!label) return;
+    state.searchText = label;
+    $('paperSearch').value = label;
+    navigateTo('papers');
+  });
+}
+
+function renderFlavorScatterOverview() {
+  const papers = state.papers;
+  Plotly.newPlot('flavorScatterOverview', [{
+    type: 'scatter', mode: 'markers',
+    x: papers.map(p => p.iclr_flavor_score||0),
+    y: papers.map(p => Math.log1p(p.citation_count||0)),
+    text: papers.map(p => p.title),
+    customdata: papers.map(p => p.id),
+    marker: {
+      size: 7, opacity: 0.8,
+      color: papers.map(p => CLUSTER_COLORS[(p.cluster_id||0) % CLUSTER_COLORS.length]),
+    },
+    hovertemplate: '<b>%{text}</b><br>ICLR Flavor: %{x:.2f}<br>log(Citations+1): %{y:.2f}<extra></extra>',
+  }], {
+    paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ title:'ICLR Flavor Score', gridcolor:'#2a2a3e', zeroline:false, range:[0,1] },
+    yaxis:{ title:'log(Citations+1)', gridcolor:'#2a2a3e', zeroline:false },
+    margin:{ t:10, b:45, l:55, r:10 },
+  }, { responsive:true, displayModeBar:false });
+
+  $('flavorScatterOverview').on('plotly_click', d => {
+    const pid = d.points[0]?.customdata;
+    if (pid) openModal(pid);
+  });
+}
+
+// ── Landscape ─────────────────────────────────────────────────────────────────
+function renderLandscape(data) {
+  if (!data) return;
+  const pts = data.points;
+  if (!pts || !pts.length) {
+    $('landscapeChart').innerHTML = '<p class="text-slate-500 text-sm p-4">No data — check server is running and data is fetched.</p>';
+    return;
+  }
+
+  // Populate cluster sidebar
+  const summary = data.cluster_summary || {};
+  $('clusterLegendList').innerHTML = Object.entries(summary)
+    .sort((a,b) => b[1].count - a[1].count)
+    .map(([cid, info]) => `
+      <div class="flex items-center gap-2 cursor-pointer hover:bg-slate-800 rounded p-1.5 -mx-1 transition cluster-row" data-cid="${cid}">
+        <span class="w-3 h-3 rounded-full flex-shrink-0" style="background:${CLUSTER_COLORS[parseInt(cid)%CLUSTER_COLORS.length]}"></span>
+        <span class="text-xs text-slate-300 flex-1 leading-snug cluster-row-label">${info.label}</span>
+        <span class="text-xs text-slate-500 flex-shrink-0">${info.count}</span>
+      </div>`).join('');
+
+  document.querySelectorAll('.cluster-row').forEach(row => {
+    row.addEventListener('click', () => showClusterPapers(parseInt(row.dataset.cid), data));
+  });
+
+  // Group by cluster
+  const clusters = {};
+  pts.forEach(p => {
+    const cid = p.cluster_id;
+    if (!clusters[cid]) clusters[cid] = { x:[], y:[], text:[], size:[], ids:[] };
+    clusters[cid].x.push(p.x); clusters[cid].y.push(p.y);
+    clusters[cid].text.push(p.title);
+    clusters[cid].size.push(Math.max(6, Math.min(20, 6 + Math.sqrt(p.citation_count||0))));
+    clusters[cid].ids.push(p.id);
+  });
+
+  const traces = Object.entries(clusters).map(([cid, d]) => ({
+    type: 'scatter', mode: 'markers',
+    name: summary[cid]?.label || `Cluster ${cid}`,
+    x: d.x, y: d.y, text: d.text, customdata: d.ids,
+    marker: {
+      size: d.size, opacity: 0.85,
+      color: CLUSTER_COLORS[parseInt(cid) % CLUSTER_COLORS.length],
+      line:{ width:1, color:'#ffffff22' }
+    },
+    hovertemplate: '<b>%{text}</b><extra></extra>',
+  }));
+
+  Plotly.newPlot('landscapeChart', traces, {
+    paper_bgcolor:'#1e1e2e', plot_bgcolor:'#13131f',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ gridcolor:'#2a2a3e', zeroline:false, showticklabels:false, title:'UMAP-1' },
+    yaxis:{ gridcolor:'#2a2a3e', zeroline:false, showticklabels:false, title:'UMAP-2' },
+    legend:{ bgcolor:'transparent', bordercolor:'#2a2a3e', font:{ size:10 } },
+    margin:{ t:20, b:50, l:50, r:20 }, hovermode:'closest',
+  }, { responsive:true, displayModeBar:false });
+
+  $('landscapeChart').on('plotly_click', d => {
+    const pid = d.points[0]?.customdata;
+    if (pid) openModal(pid);
+  });
+
+  // Legend click → show cluster papers (prevent default toggle)
+  $('landscapeChart').on('plotly_legendclick', d => {
+    const cid = parseInt(Object.keys(clusters)[d.curveNumber]);
+    showClusterPapers(cid, data);
+    return false;
+  });
+}
+
+async function showClusterPapers(clusterId, landscapeData) {
+  const label = landscapeData?.cluster_summary?.[clusterId]?.label || `Cluster ${clusterId}`;
+  try {
+    const params = `conferences=${encodeURIComponent(state.conferences.join(','))}&year_min=${state.yearMin}&year_max=${state.yearMax}&topic=${encodeURIComponent(state.topic)}`;
+    const data = await apiFetch(`/api/papers/cluster/${clusterId}?${params}`);
+    $('clusterPanelTitle').textContent = `${data.label || label} — ${data.total} papers`;
+    $('clusterPapersList').innerHTML = (data.papers || []).slice(0,25).map(p => `
+      <div class="flex items-start gap-2 cursor-pointer hover:bg-slate-800 rounded p-2 -mx-2 transition" onclick="openModal('${p.id}')">
+        ${tierPill(p.tier)}
+        <div class="flex-1 min-w-0">
+          <p class="text-sm text-slate-200 leading-snug line-clamp-2">${p.title}</p>
+          <p class="text-xs text-slate-500 mt-0.5">${p.year} · ${p.citation_count||0} cit. · Flavor ${(p.iclr_flavor_score||0).toFixed(2)}</p>
+        </div>
+      </div>`).join('') || '<p class="text-xs text-slate-500 p-2">No papers in this cluster.</p>';
+    show('clusterPanel');
+    $('clusterPanel').scrollIntoView({ behavior:'smooth', block:'nearest' });
+  } catch(e) { toast(`Could not load cluster papers: ${e.message}`); }
+}
+
+// ── Funnel ────────────────────────────────────────────────────────────────────
+let _lastFunnelData = null;
+
+function renderFunnel(data) {
+  if (!data) return;
+  _lastFunnelData = data;
+  const { nodes, links, year_breakdown } = data;
+  const nodeIds    = nodes.map(n => n.id);
+  const nodeLabels = nodes.map(n => n.label);
+
+  function linkColor(target) {
+    const t = target.toLowerCase();
+    if (t.includes('oral'))      return 'rgba(167,139,250,0.25)';
+    if (t.includes('spotlight')) return 'rgba(251,146,60,0.25)';
+    if (t.includes('poster'))    return 'rgba(34,211,238,0.25)';
+    if (t.includes('reject'))    return 'rgba(248,113,113,0.15)';
+    return 'rgba(99,102,241,0.2)';
+  }
+  function nodeColor(id) {
+    if (id === 'Submissions')    return '#6366f1';
+    if (id.match(/ICLR \d{4}/)) return '#4f46e5';
+    if (id.includes('Oral'))     return '#a78bfa';
+    if (id.includes('Spotlight'))return '#fb923c';
+    if (id.includes('Poster'))   return '#22d3ee';
+    if (id.includes('Rejected')) return '#f87171';
+    return '#94a3b8';
+  }
+
+  Plotly.newPlot('funnelChart', [{
+    type:'sankey', arrangement:'snap',
+    node:{ pad:15, thickness:20, label:nodeLabels, color:nodeIds.map(nodeColor),
+           hovertemplate:'<b>%{label}</b>: %{value:,}<extra></extra>' },
+    link:{ source:links.map(l=>nodeIds.indexOf(l.source)),
+           target:links.map(l=>nodeIds.indexOf(l.target)),
+           value:links.map(l=>l.value), color:links.map(l=>linkColor(l.target)) },
+  }], {
+    paper_bgcolor:'#1e1e2e', font:{color:'#e2e8f0',size:12,family:'Inter'},
+    margin:{t:20,b:20,l:20,r:20},
+  }, { responsive:true, displayModeBar:false });
+
+  // Year stat cards
+  $('funnelStats').innerHTML = Object.entries(year_breakdown).map(([yr, est]) => `
+    <div class="card p-4">
+      <h3 class="font-semibold text-white mb-2">ICLR ${yr}</h3>
+      <div class="space-y-1 text-xs">
+        <div class="flex justify-between"><span class="text-slate-400">Submissions</span><span class="text-white font-medium">${est.total.toLocaleString()}</span></div>
+        <div class="flex justify-between"><span class="pill-oral pill">Oral</span><span class="text-white">${est.oral}</span></div>
+        <div class="flex justify-between"><span class="pill-spotlight pill">Spotlight</span><span class="text-white">${est.spotlight}</span></div>
+        <div class="flex justify-between"><span class="pill-poster pill">Poster</span><span class="text-white">${est.poster}</span></div>
+        <div class="flex justify-between border-t border-slate-700 pt-1 mt-1">
+          <span class="text-slate-400">Accept %</span>
+          <span class="text-green-400 font-medium">${(((est.oral+est.spotlight+est.poster)/est.total)*100).toFixed(1)}%</span>
+        </div>
+        <div class="flex justify-between"><span class="text-slate-400">Rejected</span><span class="text-red-400">${est.reject.toLocaleString()}</span></div>
+      </div>
+    </div>`).join('');
+
+  // Area breakdown
+  renderAreaBreakdown(data);
+
+  // Wire sort control
+  $('areaFunnelSort').onchange = () => renderAreaBreakdown(_lastFunnelData);
+}
+
+function renderAreaBreakdown(data) {
+  const ab = data?.area_breakdown;
+  if (!ab || !Object.keys(ab).length) {
+    $('areaFunnelChart').innerHTML = '<p class="text-slate-500 text-sm p-4">No area data yet — papers must be loaded first.</p>';
+    return;
+  }
+
+  const sortBy = $('areaFunnelSort')?.value || 'total';
+  const pct = (n, tot) => tot > 0 ? ((n / tot) * 100).toFixed(1) : '0.0';
+
+  // Sort entries
+  let entries = Object.entries(ab);
+  if (sortBy === 'oral_pct')      entries.sort((a,b) => (b[1].oral||0)/b[1].total - (a[1].oral||0)/a[1].total);
+  else if (sortBy === 'spotlight_pct') entries.sort((a,b) => (b[1].spotlight||0)/b[1].total - (a[1].spotlight||0)/a[1].total);
+  else if (sortBy === 'poster_pct')    entries.sort((a,b) => (b[1].poster||0)/b[1].total - (a[1].poster||0)/a[1].total);
+  else entries.sort((a,b) => b[1].total - a[1].total);
+
+  const labels = entries.map(([k]) => k);
+  const totals = entries.map(([,v]) => v.total);
+
+  // Normalised stacked bar (100%)
+  const oralPcts  = entries.map(([,v]) => parseFloat(pct(v.oral||0, v.total)));
+  const spotPcts  = entries.map(([,v]) => parseFloat(pct(v.spotlight||0, v.total)));
+  const postPcts  = entries.map(([,v]) => parseFloat(pct(v.poster||0, v.total)));
+  const arxivPcts = entries.map(([,v]) => parseFloat(pct(v.arxiv||0, v.total)));
+
+  const barBase = (name, pcts, color, pat) => ({
+    type:'bar', name, orientation:'h',
+    y: labels, x: pcts,
+    marker:{ color },
+    hovertemplate: `<b>%{y}</b><br>${name}: %{x:.1f}%<extra></extra>`,
+  });
+
+  Plotly.newPlot('areaFunnelChart', [
+    barBase('Oral',      oralPcts,  '#a78bfa'),
+    barBase('Spotlight', spotPcts,  '#fb923c'),
+    barBase('Poster',    postPcts,  '#22d3ee'),
+    ...(arxivPcts.some(v=>v>0) ? [barBase('arXiv', arxivPcts, '#4ade80')] : []),
+    // Absolute total as text annotation on invisible trace
+    { type:'scatter', mode:'text', x: oralPcts.map((o,i)=>o+spotPcts[i]+postPcts[i]+arxivPcts[i]+2),
+      y: labels, text: totals.map(t=>`${t} papers`),
+      textfont:{color:'#64748b',size:10}, showlegend:false, hoverinfo:'skip' },
+  ], {
+    barmode: 'stack',
+    paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ title:'% of papers in area', gridcolor:'#2a2a3e', zeroline:false, range:[0,108] },
+    yaxis:{ gridcolor:'#2a2a3e', automargin:true },
+    legend:{ orientation:'h', y:1.08, bgcolor:'transparent' },
+    margin:{ t:30, b:50, l:180, r:20 },
+  }, { responsive:true, displayModeBar:false });
+
+  // Table
+  $('areaFunnelTableBody').innerHTML = entries.map(([label, v]) => {
+    const tot = v.total;
+    const o = v.oral||0, s = v.spotlight||0, po = v.poster||0;
+    const barW = (n) => `<div class="inline-block h-1.5 rounded" style="width:${Math.max(pct(n,tot),0.5)}%;background:currentColor"></div>`;
+    return `<tr class="border-b border-slate-800 hover:bg-slate-800 transition cursor-pointer" onclick="filterByArea('${label.replace(/'/g,"\\'")}')"
+      title="Click to filter Papers tab to this area">
+      <td class="py-2 pr-4 text-slate-200 font-medium">${label}</td>
+      <td class="py-2 pr-3 text-center text-white font-semibold">${tot}</td>
+      <td class="py-2 pr-3 text-center" style="color:#a78bfa">${o} <span class="text-slate-600">(${pct(o,tot)}%)</span></td>
+      <td class="py-2 pr-3 text-center" style="color:#fb923c">${s} <span class="text-slate-600">(${pct(s,tot)}%)</span></td>
+      <td class="py-2 pr-3 text-center" style="color:#22d3ee">${po} <span class="text-slate-600">(${pct(po,tot)}%)</span></td>
+      <td class="py-2 pr-3">
+        <div class="flex items-center gap-1" style="color:#a78bfa">${barW(o)} <span class="text-xs">${pct(o,tot)}%</span></div>
+      </td>
+      <td class="py-2 pr-3">
+        <div class="flex items-center gap-1" style="color:#fb923c">${barW(s)} <span class="text-xs">${pct(s,tot)}%</span></div>
+      </td>
+      <td class="py-2">
+        <div class="flex items-center gap-1" style="color:#22d3ee">${barW(po)} <span class="text-xs">${pct(po,tot)}%</span></div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Heatmap: area × year
+  renderAreaYearHeatmap(data);
+}
+
+function renderAreaYearHeatmap(data) {
+  const yab = data?.year_area_breakdown;
+  if (!yab || !Object.keys(yab).length) return;
+
+  const years  = Object.keys(yab).sort();
+  const areas  = Object.keys(data.area_breakdown || {});
+  if (!areas.length || !years.length) return;
+
+  // z[area_index][year_index] = count
+  const zVals = areas.map(area =>
+    years.map(yr => yab[yr]?.[area]?.total || 0)
+  );
+
+  Plotly.newPlot('areaYearHeatmap', [{
+    type: 'heatmap',
+    z: zVals,
+    x: years,
+    y: areas,
+    colorscale: [[0,'#13131f'],[0.01,'#1e1e2e'],[0.3,'#4338ca'],[0.7,'#6366f1'],[1,'#a5b4fc']],
+    hoverongaps: false,
+    hovertemplate: '<b>%{y}</b><br>%{x}: %{z} papers<extra></extra>',
+    colorbar:{ tickfont:{color:'#94a3b8',size:10}, title:{text:'papers',font:{color:'#94a3b8',size:10}}, thickness:12 },
+    text: zVals.map(row => row.map(v => v > 0 ? String(v) : '')),
+    texttemplate: '%{text}',
+    textfont: { color:'#e2e8f0', size:11 },
+  }], {
+    paper_bgcolor:'#1e1e2e', plot_bgcolor:'#13131f',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ gridcolor:'#2a2a3e', side:'top' },
+    yaxis:{ gridcolor:'#2a2a3e', automargin:true },
+    margin:{ t:40, b:20, l:180, r:60 },
+  }, { responsive:true, displayModeBar:false });
+}
+
+function filterByArea(label) {
+  state.searchText = label;
+  $('paperSearch').value = label;
+  navigateTo('papers');
+}
+
+// ── Papers ────────────────────────────────────────────────────────────────────
+function renderPapers(reset = true) {
+  if (reset) state.paperOffset = 0;
+  const filtered = getFilteredPapers();
+  $('paperCount').textContent = `${filtered.length} papers`;
+  const visible = filtered.slice(0, state.paperOffset + state.PAGE_SIZE);
+  if (reset) $('papersGrid').innerHTML = visible.map(paperCard).join('');
+  else $('papersGrid').insertAdjacentHTML('beforeend', visible.slice(state.paperOffset).map(paperCard).join(''));
+  state.paperOffset = visible.length;
+  const loadMore = $('loadMoreBtn');
+  if (state.paperOffset < filtered.length) {
+    loadMore.classList.remove('hidden');
+    loadMore.textContent = `Load more (${filtered.length - state.paperOffset} remaining)`;
+  } else { loadMore.classList.add('hidden'); }
+}
+
+function getFilteredPapers() {
+  let papers;
+
+  // ── Semantic mode: use backend-ranked results ─────────────────────────────
+  if (state.semanticResults !== null) {
+    papers = [...state.semanticResults];
+    // Allow secondary sort on top of semantic results
+    if (state.sortBy === 'semantic') {
+      papers.sort((a,b) => (b.rrf_score||0) - (a.rrf_score||0));
+    } else if (state.sortBy !== 'relevance') {
+      const sortMap = {
+        impact:      (a,b) => b.impact_niche_score - a.impact_niche_score,
+        citation:    (a,b) => (b.citation_count||0) - (a.citation_count||0),
+        iclr_flavor: (a,b) => (b.iclr_flavor_score||0) - (a.iclr_flavor_score||0),
+      };
+      if (sortMap[state.sortBy]) papers.sort(sortMap[state.sortBy]);
+    }
+    // Text filter still applies so user can narrow semantic results
+    if (state.searchText) {
+      const q = state.searchText.toLowerCase();
+      papers = papers.filter(p =>
+        p.title?.toLowerCase().includes(q) ||
+        p.abstract?.toLowerCase().includes(q)
+      );
+    }
+    return papers;
+  }
+
+  // ── Normal mode ───────────────────────────────────────────────────────────
+  papers = [...state.papers];
+  if (state.searchText) {
+    const q = state.searchText.toLowerCase();
+    papers = papers.filter(p =>
+      p.title?.toLowerCase().includes(q) ||
+      p.abstract?.toLowerCase().includes(q) ||
+      p.authors?.some(a => a.toLowerCase().includes(q)) ||
+      p.keywords?.some(k => k.toLowerCase().includes(q)) ||
+      p.cluster_label?.toLowerCase().includes(q)
+    );
+  }
+  const sortMap = {
+    relevance:   (a,b) => b.relevance_score - a.relevance_score,
+    impact:      (a,b) => b.impact_niche_score - a.impact_niche_score,
+    citation:    (a,b) => (b.citation_count||0) - (a.citation_count||0),
+    iclr_flavor: (a,b) => (b.iclr_flavor_score||0) - (a.iclr_flavor_score||0),
+    semantic:    (a,b) => b.relevance_score - a.relevance_score,  // fallback
+  };
+  papers.sort(sortMap[state.sortBy] || sortMap.relevance);
+  return papers;
+}
+
+function paperCard(p) {
+  const fc = scoreColor(p.iclr_flavor_score||0);
+  const flaws = p.fatal_flaws?.length
+    ? `<div class="mt-2">${p.fatal_flaws.slice(0,2).map(f=>`<span class="flaw-tag">${f}</span>`).join('')}</div>` : '';
+  const arxivBtn = p.arxiv_url
+    ? `<a href="${p.arxiv_url}" target="_blank" onclick="event.stopPropagation()" class="text-xs text-slate-500 hover:text-indigo-400">arXiv ↗</a>` : '';
+  const flavorDisplay = (p.iclr_flavor_score||0) > 0
+    ? `<span style="color:${fc}">${(p.iclr_flavor_score).toFixed(2)}</span>`
+    : `<span class="text-slate-600 text-xs">computing…</span>`;
+  // Semantic score badge — shown only in semantic mode
+  const semBadge = state.semanticResults !== null && p.rrf_score != null
+    ? `<span class="pill pill-oral text-xs" title="RAG-Fusion relevance score">\ud83e\udde0 ${(p.rrf_score*100).toFixed(0)}%</span>`
+    : '';
+  return `
+    <div class="card p-4 cursor-pointer hover:border-indigo-500 transition-all" onclick="openModal('${p.id}')">
+      <div class="flex items-start justify-between gap-2 mb-2">
+        <div class="flex items-center gap-1.5">${tierPill(p.tier)}${semBadge}</div>
+        <span class="text-xs text-slate-500">${p.year} · ${p.venue||''}</span>
+      </div>
+      <p class="text-sm font-semibold text-white leading-snug mb-1 line-clamp-2">${p.title}</p>
+      <p class="text-xs text-slate-500 mb-2 line-clamp-1">${p.authors?.slice(0,3).join(', ')||''}${(p.authors?.length||0)>3?' et al.':''}</p>
+      <p class="text-xs text-slate-400 line-clamp-3 mb-2">${p.abstract||''}</p>
+      ${flaws}
+      <div class="flex items-center gap-3 mt-3 pt-3 border-t border-slate-700">
+        <div class="flex-1">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-slate-500">ICLR Flavor</span>${flavorDisplay}
+          </div>
+          <div class="score-bar"><div class="score-fill" style="width:${((p.iclr_flavor_score||0)*100).toFixed(0)}%;background-image:none;background:${fc}"></div></div>
+        </div>
+        <div class="text-right">
+          <div class="text-xs text-slate-500">Citations</div>
+          <div class="text-sm font-semibold text-white">${p.citation_count||0}</div>
+        </div>
+      </div>
+      <div class="flex justify-between mt-2">
+        <span class="text-xs text-slate-600">${p.cluster_label||''}</span>
+        ${arxivBtn}
+      </div>
+    </div>`;
+}
+
+function renderEmptyState() {
+  $('papersGrid').innerHTML = `
+    <div class="col-span-3 text-center py-20 text-slate-500">
+      <div class="text-4xl mb-3">🔌</div>
+      <p class="text-sm">Backend not reachable — start the server:<br>
+      <code class="bg-slate-800 px-2 py-1 rounded text-xs text-indigo-300 mt-2 inline-block">cd backend && uvicorn main:app --reload</code></p>
+    </div>`;
+}
+
+// ── Trends ────────────────────────────────────────────────────────────────────
+function renderTrends(data) {
+  if (!data) return;
+  const { topics, data: tdata, years } = data;
+  const traces = topics.map((topic, i) => ({
+    type:'bar', name:topic, x:years,
+    y: years.map(yr => tdata[topic]?.[yr] || 0),
+    marker:{ color:CLUSTER_COLORS[i % CLUSTER_COLORS.length] },
+  }));
+  Plotly.newPlot('trendsChart', traces, {
+    barmode:'group', paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ gridcolor:'#2a2a3e' },
+    yaxis:{ gridcolor:'#2a2a3e', zeroline:false, title:'Paper Count' },
+    legend:{ bgcolor:'transparent' }, margin:{ t:10, b:40, l:50, r:20 },
+  }, { responsive:true, displayModeBar:false });
+
+  $('trendInsights').innerHTML = topics.slice(0,3).map(topic => {
+    const vals = years.map(yr => tdata[topic]?.[yr] || 0);
+    const change = vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
+    const t = change > 0
+      ? `<span class="trend-up">▲ +${change}</span>`
+      : `<span class="trend-down">▼ ${change}</span>`;
+    return `<div class="card p-4"><h4 class="text-sm font-medium text-white mb-1 capitalize">${topic}</h4>
+      <p class="text-xs text-slate-400">${vals.join(' → ')} papers ${t}</p></div>`;
+  }).join('');
+}
+
+// ── White Spaces ─────────────────────────────────────────────────────────────
+// Shows: cluster paper density vs citation traction.
+// Top-left = few papers but high interest = White Space opportunity.
+function renderWhiteSpaces(data) {
+  if (!data) return;
+  const { white_spaces, total_papers } = data;
+
+  if (!white_spaces || white_spaces.length === 0) {
+    $('whiteSpaceCards').innerHTML = `<div class="card p-6 text-center">
+      <p class="text-slate-400 text-sm">No clusters found yet. Make sure data is loaded (green dot).</p>
+      <p class="text-xs text-slate-600 mt-2">White spaces appear once papers are fetched and clustered.</p>
+    </div>`;
+    if ($('quadrantChart')) $('quadrantChart').innerHTML = '';
+    return;
+  }
+
+  // Sort by opportunity: sparse clusters with any traction first
+  const ws = [...white_spaces].sort((a,b) =>
+    (b.gap_score * Math.max(b.avg_citations, b.avg_velocity*10 + 1))
+    - (a.gap_score * Math.max(a.avg_citations, a.avg_velocity*10 + 1))
+  );
+
+  $('whiteSpaceCards').innerHTML = ws.slice(0, 6).map((w, i) => {
+    const isGap = w.paper_count < (total_papers / white_spaces.length);
+    return `
+    <div class="white-space-card" style="${isGap ? '' : 'background:#0f1a2e;border-color:#1e3a5f'}">
+      <div class="flex items-start gap-3">
+        <div class="text-xl font-bold ${isGap ? 'text-green-400' : 'text-blue-400'}">#${i+1}</div>
+        <div class="flex-1">
+          <div class="flex items-center gap-2 flex-wrap mb-1">
+            <h3 class="font-semibold ${isGap ? 'text-green-300' : 'text-blue-300'}">${w.cluster_label}</h3>
+            ${isGap ? `<span class="pill" style="background:#16653422;color:#4ade80;border:1px solid #16653444">Gap ×${w.gap_score.toFixed(1)}</span>` : ''}
+          </div>
+          <p class="text-sm text-slate-300">${w.opportunity}</p>
+          <div class="flex gap-4 mt-2 text-xs text-slate-500 flex-wrap">
+            <span>📄 ${w.paper_count} papers</span>
+            <span>📊 ${w.avg_citations.toFixed(0)} avg cit.</span>
+            <span>⚡ ${w.avg_velocity.toFixed(2)} cit/mo</span>
+            ${w.total_stars > 0 ? `<span>⭐ ${w.total_stars} stars</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Chart: paper count (x) vs citation traction (y)
+  // Bubble size = gap_score (how sparse vs average)
+  // Color ramp: green (sparse/white space) → blue (well-covered)
+  const avgClusterSize = total_papers / Math.max(white_spaces.length, 1);
+
+  Plotly.newPlot('quadrantChart', [
+    {
+      type:'scatter', mode:'markers+text',
+      x: ws.map(w => w.paper_count),
+      y: ws.map(w => Math.max(w.avg_citations, w.avg_velocity * 50)),
+      text: ws.map(w => w.cluster_label.split(' ').slice(0,3).join(' ')),
+      textposition: 'top center',
+      textfont: { size:9, color:'#64748b' },
+      customdata: ws.map(w => w.cluster_label),
+      marker: {
+        size: ws.map(w => Math.max(12, Math.min(40, w.gap_score * 14))),
+        color: ws.map(w => w.gap_score),
+        colorscale: [[0,'#1e3a8a'],[0.4,'#6366f1'],[0.8,'#22c55e'],[1,'#4ade80']],
+        showscale: true,
+        colorbar: {
+          title: 'Gap Score<br>(>1 = sparse)',
+          tickfont:{ color:'#94a3b8', size:10 },
+          titlefont:{ color:'#94a3b8', size:11 },
+          thickness: 12, len: 0.6,
+        },
+        line:{ width:1, color:'#ffffff22' },
+      },
+      hovertemplate: '<b>%{customdata}</b><br>Papers in cluster: %{x}<br>Avg citations: %{y:.0f}<br>Gap score: %{marker.color:.2f}×<extra></extra>',
+    },
+    {
+      // Vertical dashed line at avg cluster size
+      type:'scatter', mode:'lines',
+      x: [avgClusterSize, avgClusterSize],
+      y: [0, Math.max(...ws.map(w=>w.avg_citations), 1) * 1.3],
+      line:{ color:'#f59e0b55', dash:'dot', width:1.5 },
+      name: `Avg cluster (${avgClusterSize.toFixed(0)} papers)`,
+      hoverinfo: 'name',
+    },
+  ], {
+    paper_bgcolor:'#1e1e2e', plot_bgcolor:'#13131f',
+    font:{ color:'#94a3b8', size:11 },
+    xaxis:{ title:'Paper Count in Cluster →', gridcolor:'#2a2a3e', zeroline:false },
+    yaxis:{ title:'↑ Citation Traction (avg citations)', gridcolor:'#2a2a3e', zeroline:false },
+    legend:{ bgcolor:'transparent', font:{ size:10 } },
+    margin:{ t:20, b:55, l:65, r:20 },
+    annotations:[{
+      x:0.01, y:0.99, xref:'paper', yref:'paper', showarrow:false,
+      text:'🔭 Top-left = research gap with real interest',
+      font:{ color:'#4ade80', size:10 }, align:'left',
+    }],
+  }, { responsive:true, displayModeBar:false });
+}
+
+// ── Paper Modal ────────────────────────────────────────────────────────────────
+const _paperModalCache = {};
+async function openModal(paperId) {
+  if (!_paperModalCache[paperId]) {
+    const found = state.papers.find(p => p.id === paperId);
+    if (found) _paperModalCache[paperId] = found;
+    else {
+      try { _paperModalCache[paperId] = await apiFetch(`/api/paper/${paperId}`); }
+      catch(e) { toast('Could not load paper details'); return; }
+    }
+  }
+  const p = _paperModalCache[paperId];
+  $('modalTierBadge').innerHTML = tierPill(p.tier);
+  $('modalTitle').textContent = p.title;
+  $('modalAuthors').textContent = (p.authors||[]).join(', ');
+  $('modalYear').textContent = p.year;
+  $('modalCitations').textContent = p.citation_count||0;
+  $('modalFlavor').textContent = (p.iclr_flavor_score||0).toFixed(2);
+  const setBar = (barId, valId, w, v) => {
+    $(barId).style.width = `${Math.min(100, w*100).toFixed(0)}%`; $(valId).textContent = v;
+  };
+  setBar('modalRelevanceBar','modalRelevanceVal', p.relevance_score||0, (p.relevance_score||0).toFixed(2));
+  setBar('modalImpactBar','modalImpactVal', Math.min(1,(p.impact_niche_score||0)/10), (p.impact_niche_score||0).toFixed(1));
+  setBar('modalFlavorBar','modalFlavorVal', p.iclr_flavor_score||0, (p.iclr_flavor_score||0).toFixed(2));
+  $('modalAbstract').textContent = p.abstract || 'No abstract available.';
+  $('modalKeywords').innerHTML = p.keywords?.length
+    ? `<div class="mb-2">${p.keywords.slice(0,10).map(k=>`<span class="tag">${k}</span>`).join('')}</div>` : '';
+  $('modalFlaws').innerHTML = p.fatal_flaws?.length
+    ? `<div><span class="text-xs font-semibold text-red-400 mr-2">⚠ Fatal Flaws:</span>${p.fatal_flaws.map(f=>`<span class="flaw-tag">${f}</span>`).join('')}</div>` : '';
+  const rs = p.reviewer_stats;
+  $('modalReviewerStats').innerHTML = rs?.num_reviews
+    ? `<div class="stat-card"><h4 class="text-xs font-semibold text-slate-400 mb-2">Reviewer Stats (${rs.num_reviews} reviews)</h4>
+       <div class="flex gap-4 text-xs">
+         <span>Avg Rating: <strong class="text-white">${rs.avg_rating?.toFixed(1)}</strong></span>
+         <span>Avg Confidence: <strong class="text-white">${rs.avg_confidence?.toFixed(1)}</strong></span>
+       </div></div>` : '';
+  $('modalOpenreviewLink').href = p.openreview_url || '#';
+  $('modalOpenreviewLink').style.display = p.openreview_url ? '' : 'none';
+  $('modalArxivLink').href = p.arxiv_url || '#';
+  $('modalArxivLink').style.display = p.arxiv_url ? '' : 'none';
+  $('modalPdfLink').href = p.pdf_url || '#';
+  $('modalPdfLink').style.display = p.pdf_url ? '' : 'none';
+  $('paperModal').classList.remove('hidden');
+}
+
+
+
+// ── Page navigation ────────────────────────────────────────────────────────────
+function navigateTo(page) {
+  document.querySelectorAll('.page-content').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.page-tab').forEach(el => el.classList.remove('active'));
+  show(`page-${page}`);
+  document.querySelector(`.page-tab[data-page="${page}"]`)?.classList.add('active');
+  state.activePage = page;
+  // Always fetch fresh on navigate — no cache guards
+  if (page === 'landscape')  loadLandscape();
+  if (page === 'funnel')     loadFunnel();
+  if (page === 'trends')     loadTrends();
+  if (page === 'whitespace') loadWhiteSpaces();
+  if (page === 'cache')      loadCacheList();
+}
+
+// ── Event listeners ────────────────────────────────────────────────────────────
+document.querySelectorAll('.page-tab').forEach(btn => {
+  btn.addEventListener('click', () => navigateTo(btn.dataset.page));
+});
+
+// paperSearch: Enter → semantic; input → text filter (when not in semantic mode)
+$('paperSearch').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const q = e.target.value.trim();
+    if (q) { runSemanticSearch(q); } else { clearSemanticSearch(); }
+  }
+});
+$('paperSearch').addEventListener('input', e => {
+  state.searchText = e.target.value;
+  if (!e.target.value.trim()) clearSemanticSearch();
+  else if (!state.semanticResults) renderPapers(true);
+});
+$('semanticSearchBtn').addEventListener('click', () => {
+  const q = $('paperSearch').value.trim();
+  if (q) runSemanticSearch(q); else $('paperSearch').focus();
+});
+$('clearSemanticBtn').addEventListener('click', clearSemanticSearch);
+
+async function runSemanticSearch(query) {
+  const btn   = $('semanticSearchBtn');
+  const label = $('searchBtnLabel');
+  btn.disabled = true;
+  label.textContent = '⏳…';
+
+  try {
+    const confs  = (state.conferences || ['ICLR']).join(',');
+    const topic  = ($('topicInput')?.value || state.topic || '').trim();
+    const params = new URLSearchParams({
+      query,
+      conferences: confs,
+      year_min:    state.yearMin,
+      year_max:    state.yearMax,
+      top_k:       20,
+      topic,
+      expand:      'true',
+    });
+    const data = await apiFetch(`/api/semantic_search?${params}`);
+    state.semanticResults = data.results   || [];
+    state.expandedQueries = data.expanded_queries || [query];
+
+    $('semanticModeRow').classList.remove('hidden');
+    // Chip 0 = original (indigo), rest = expansions (slate)
+    $('expandedQueriesChips').innerHTML = state.expandedQueries.map((q, i) => {
+      const display = q.length > 45 ? q.slice(0,45)+'…' : q;
+      const cls     = i === 0 ? 'pill-oral' : 'pill-arxiv';
+      return `<span class="pill ${cls} text-xs cursor-default" title="${q.replace(/"/g,'&quot;')}">${display}</span>`;
+    }).join('');
+
+    // Switch sort to semantic automatically
+    $('sortSelect').value = 'semantic';
+    state.sortBy = 'semantic';
+
+    renderPapers(true);
+    navigateTo('papers');
+    toast(`🧠 ${state.semanticResults.length} semantic hits — ${state.expandedQueries.length} query variants`);
+  } catch(err) {
+    toast('Semantic search unavailable — using text filter');
+    state.searchText = query;
+    if (!state.semanticResults) renderPapers(true);
+  } finally {
+    btn.disabled = false;
+    label.textContent = '⚡ AI Search';
+  }
+}
+
+function clearSemanticSearch() {
+  state.semanticResults = null;
+  state.expandedQueries = [];
+  state.searchText      = '';
+  $('paperSearch').value = '';
+  $('semanticModeRow').classList.add('hidden');
+  $('sortSelect').value = 'relevance';
+  state.sortBy = 'relevance';
+  renderPapers(true);
+}
+$('sortSelect').addEventListener('change', e => {
+  state.sortBy = e.target.value; renderPapers(true);
+});
+$('loadMoreBtn').addEventListener('click', () => renderPapers(false));
+$('refreshBtn').addEventListener('click', async () => {
+  $('statusDot').className = 'w-2 h-2 rounded-full bg-yellow-400 loading-pulse';
+  toast('Refreshing data cache…');
+  try { await apiFetch('/api/refresh'); } catch(e) {}
+  loadPapers();
+  if (state.activePage !== 'overview') navigateTo(state.activePage);
+});
+$('closeModal').addEventListener('click', () => $('paperModal').classList.add('hidden'));
+$('paperModal').addEventListener('click', e => { if (e.target === $('paperModal')) $('paperModal').classList.add('hidden'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('paperModal').classList.add('hidden'); });
+
+
+// ── Cache page ─────────────────────────────────────────────────────────────────
+async function loadCacheList() {
+  try {
+    const data = await apiFetch('/api/cache');
+    $('cacheInfoCard').innerHTML = `
+      <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Status</div>
+        <span class="pill ${data.enabled?'pill-arxiv':'pill-poster'} text-xs">${data.enabled?'✅ enabled':'❌ disabled'}</span></div>
+      <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Cached Queries</div><div class="text-white font-bold text-lg">${data.total}</div></div>
+      <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">TTL</div><div class="text-white font-bold text-lg">${data.ttl_days} <span class="text-xs font-normal text-slate-400">days</span></div></div>
+      <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Directory</div>
+        <code class="text-indigo-300 text-xs">${data.cache_dir?.split('/').slice(-2).join('/')}/</code></div>`;
+    const container = $('cacheEntriesTable');
+    if (!data.entries?.length) {
+      container.innerHTML = '<div class="col-span-3 text-slate-600 text-center py-8">No cached queries yet — load papers to populate the cache.</div>'; return;
+    }
+    container.innerHTML = data.entries.map(e => {
+      const age = e.fetched_at ? timeSince(e.fetched_at) : '—';
+      const confColor = {'ICLR':'#6366f1','ICML':'#f59e0b','NeurIPS':'#22d3ee','AAAI':'#4ade80','ACL':'#fb923c','EMNLP':'#f472b6'}[e.conference] || '#94a3b8';
+      return `<div class="card p-4 flex flex-col gap-3 hover:border-indigo-700 transition">
+        <!-- Top row: conf badge + year + age -->
+        <div class="flex items-center justify-between">
+          <span class="px-2 py-0.5 rounded text-xs font-bold text-white" style="background:${confColor}22;color:${confColor};">${e.conference}</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-white">${e.year}</span>
+            <span class="text-xs text-slate-500">${age} ago</span>
+          </div>
+        </div>
+        <!-- Topic -->
+        <p class="text-sm text-slate-200 font-medium leading-snug line-clamp-2">${e.topic || '—'}</p>
+        <!-- Stats row -->
+        <div class="flex items-center gap-3 text-xs text-slate-400">
+          <span><span class="text-white font-semibold">${e.total_papers}</span> papers</span>
+          <span class="text-slate-700">·</span>
+          <span>${e.size_kb} KB</span>
+          <span class="text-slate-700">·</span>
+          <code class="text-indigo-400 truncate max-w-[120px]">${e.file}</code>
+        </div>
+        <!-- Actions -->
+        <div class="flex justify-end gap-3 pt-1 border-t border-slate-800">
+          <button onclick="viewCacheRaw('${e.key}')" class="text-indigo-400 hover:text-indigo-200 text-xs font-medium">📄 View</button>
+          <button onclick="invalidateCacheEntry('${e.conference}',${e.year})" class="text-red-400 hover:text-red-200 text-xs font-medium">🗑 Delete</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { $('cacheInfoCard').innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`; }
+}
+
+async function viewCacheRaw(key) {
+  try {
+    const text = await (await fetch(`/api/cache/${key}/raw`)).text();
+    $('cacheRawContent').textContent = text;
+    show('cacheRawViewer');
+    $('cacheRawViewer').scrollIntoView({ behavior:'smooth' });
+  } catch(e) { toast(`Error: ${e.message}`); }
+}
+
+async function invalidateCacheEntry(conference, year) {
+  if (!confirm(`Delete cache for ${conference} ${year}?`)) return;
+  try {
+    await fetch(`/api/cache/${conference}/${year}`, { method:'DELETE' });
+    toast(`Invalidated ${conference} ${year}`);
+    loadCacheList(); state.papers = []; loadPapers();
+  } catch(e) { toast(`Error: ${e.message}`); }
+}
+
+async function invalidateAllCache() {
+  if (!confirm('Clear ALL cached .md files and re-fetch everything?')) return;
+  try {
+    await fetch('/api/refresh', { method:'POST' });
+    toast('Cache cleared — re-fetching…');
+    state.papers = []; loadPapers();
+    setTimeout(loadCacheList, 3000);
+  } catch(e) { toast(`Error: ${e.message}`); }
+}
+
+function timeSince(isoStr) {
+  try {
+    const d = new Date(isoStr + 'Z');
+    const h = Math.floor((Date.now() - d.getTime()) / 3600000);
+    if (h < 1) return 'just now';
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h/24)}d ago`;
+  } catch { return isoStr; }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+loadPapers();
+loadFunnel();
+</script>
+</body>
+</html>

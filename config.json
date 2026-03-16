@@ -1,0 +1,95 @@
+{
+  "app": {
+    "title": "ConferencePapers — Agents for Productivity",
+    "version": "1.0.0",
+    "port": 8000
+  },
+  "conferences": {
+    "ICLR": {
+      "openreview_venue_template": "ICLR.cc/{year}/Conference",
+      "2020": { "venue_id": "ICLR.cc/2020/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2021": { "venue_id": "ICLR.cc/2021/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2022": { "venue_id": "ICLR.cc/2022/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2023": { "venue_id": "ICLR.cc/2023/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2024": { "venue_id": "ICLR.cc/2024/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2025": { "venue_id": "ICLR.cc/2025/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2026": { "venue_id": "ICLR.cc/2026/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } }
+    },
+    "NeurIPS": {
+      "openreview_venue_template": "NeurIPS.cc/{year}/Conference",
+      "2022": { "venue_id": "NeurIPS.cc/2022/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2023": { "venue_id": "NeurIPS.cc/2023/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2024": { "venue_id": "NeurIPS.cc/2024/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2025": { "venue_id": "NeurIPS.cc/2025/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } }
+    },
+    "ICML": {
+      "openreview_venue_template": "ICML.cc/{year}/Conference",
+      "2023": { "venue_id": "ICML.cc/2023/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2024": { "venue_id": "ICML.cc/2024/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "spotlight": "Accept (spotlight)", "poster": "Accept (poster)" } },
+      "2025": { "venue_id": "ICML.cc/2025/Conference", "acceptance_tiers": { "oral": "Accept (oral)", "poster": "Accept (poster)" } }
+    },
+    "ACL": {},
+    "EMNLP": {},
+    "AAAI": {}
+  },
+  "focus": {
+    "topic": "Agents for Productivity",
+    "keywords": [
+      "agent", "agentic", "tool use", "tool-use", "tool-calling",
+      "task automation", "workflow automation", "productivity",
+      "personal assistant", "office automation", "email agent",
+      "code agent", "browser agent", "web agent", "computer use",
+      "autonomous agent", "multi-agent", "multi agent", "planning agent",
+      "task planning", "hierarchical planning", "ReAct", "chain-of-thought",
+      "function calling", "API calling", "orchestration", "LLM agent",
+      "language agent", "action model", "decision making agent",
+      "long-horizon", "task completion", "benchmark agent",
+      "document understanding", "information extraction agent",
+      "calendar", "scheduling agent", "digital worker"
+    ],
+    "anti_keywords": [
+      "robot", "robotics", "embodied", "manipulation", "locomotion",
+      "autonomous driving", "recommendation system"
+    ]
+  },
+  "iclr_flavor_heuristics": {
+    "good_signals": [
+      "representation", "latent space", "scaling law", "emergent",
+      "symmetry", "generalization", "in-context learning", "attention mechanism",
+      "theoretical", "analysis", "understanding", "interpretability",
+      "architecture", "pre-training", "fine-tuning", "alignment"
+    ],
+    "bad_signals": [
+      "engineering", "system design", "pipeline", "deployed",
+      "user study", "end-to-end system", "middleware", "API wrapper"
+    ]
+  },
+  "apis": {
+    "semantic_scholar": {
+      "base_url": "https://api.semanticscholar.org/graph/v1",
+      "fields": "title,year,citationCount,influentialCitationCount,externalIds,url,abstract,venue"
+    },
+    "arxiv": {
+      "base_url": "http://export.arxiv.org/api/query",
+      "max_results": 200
+    },
+    "openreview": {
+      "base_url": "https://api2.openreview.net"
+    }
+  },
+  "scoring": {
+    "citation_velocity_window_days": 365,
+    "min_stars_threshold": 10
+  },
+  "llm": {
+    "model_name": "gpt-4.1",
+    "model_endpoint": "ghcp",
+    "comment": "model_endpoint: 'ghcp' uses GitHub Copilot SDK; omit or set to an Azure URL to use Azure OpenAI. Override with LLM_MODEL_NAME / LLM_MODEL_ENDPOINT env vars."
+  },
+  "cache": {
+    "enabled": true,
+    "dir": "cache",
+    "ttl_days": 7,
+    "comment": "Each (conference, year, topic) query is stored as an Obsidian-style .md file. Set ttl_days=0 to never expire."
+  }
+}
