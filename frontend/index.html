@@ -121,10 +121,14 @@
     <!-- Tier multi-select chips -->
     <div class="flex items-center gap-1 flex-wrap" id="tierChipsRow">
       <button class="tier-chip active" id="tierAll" data-tier="all">All tiers</button>
-      <button class="tier-chip" data-tier="oral" title="Top ~5% by citations in the query — citation-impact proxy">⬤ Oral ★</button>
-      <button class="tier-chip" data-tier="spotlight" title="Next ~15% by citations — citation-impact proxy">⬤ Spotlight</button>
-      <button class="tier-chip" data-tier="poster" title="Next ~40% by citations — citation-impact proxy">⬤ Poster</button>
-      <button class="tier-chip" data-tier="arxiv" title="Lower-citation arXiv papers">⬤ arXiv</button>
+      <button class="tier-chip" data-tier="oral"
+        title="Priority 1: confirmed at ICLR/NeurIPS/ICML via Semantic Scholar venue (top 5% by citations within confirmed). Priority 2 fallback: top 5% citations among unconfirmed arXiv papers.">⬤ Oral ★</button>
+      <button class="tier-chip" data-tier="spotlight"
+        title="Priority 1: confirmed conference paper (6–20% citation range among confirmed). Priority 2 fallback: 6–20% of unconfirmed arXiv papers by citations.">⬤ Spotlight</button>
+      <button class="tier-chip" data-tier="poster"
+        title="Priority 1: confirmed conference paper (lower citation tier). Priority 2 fallback: 21–60% of unconfirmed arXiv papers.">⬤ Poster</button>
+      <button class="tier-chip" data-tier="arxiv"
+        title="Unconfirmed arXiv preprints — no Semantic Scholar venue match found. May include rejected submissions or papers not yet indexed.">⬤ arXiv only</button>
     </div>
 
     <div class="ml-auto flex items-center gap-2">

@@ -199,9 +199,12 @@ async def _fetch_year_papers(
                 None, CACHE.get, conference, year, topic
             )
             if cached_raw:
+                # Re-resolve venue-based tiers (idempotent: skips non-arxiv papers
+                # and conference papers already stored with correct tier in cache).
+                cached_raw = _resolve_tiers_from_venue(list(cached_raw), conference)
                 accepted_density = max(len(cached_raw), 1)
                 papers = [_raw_to_paper(r, accepted_density) for r in cached_raw]
-                _assign_proxy_tiers(papers)
+                _assign_proxy_tiers(papers)   # fallback proxy for remaining "arxiv"
                 papers.sort(key=lambda p: p.relevance_score, reverse=True)
                 _PAPER_CACHE[cache_key] = papers   # atomic dict assignment (GIL)
                 logger.info(f"[L2 HIT] {conference} {year} — {len(papers)} papers")
@@ -257,6 +260,11 @@ async def _fetch_year_papers(
         except Exception as e:
             logger.warning(f"[S2] Enrichment failed: {e}")
 
+        # 3c-ii. Use S2 venue to identify papers actually published at `conference`
+        #        and assign oral/spotlight/poster by citation percentile.
+        #        Must run BEFORE clustering so tier is stored in cache.
+        raw_papers = _resolve_tiers_from_venue(raw_papers, conference)
+
         # 3d. Filter + cluster (CPU-heavy — run in executor)
         def _cluster_and_filter(papers):
             relevant = [p for p in papers
@@ -282,7 +290,7 @@ async def _fetch_year_papers(
 
         # ── Populate L1 (atomic assignment) ──────────────────────────────────
         papers = [_raw_to_paper(r, accepted_density) for r in relevant]
-        _assign_proxy_tiers(papers)
+        _assign_proxy_tiers(papers)   # fallback proxy only for remaining "arxiv" papers
         papers.sort(key=lambda p: p.relevance_score, reverse=True)
         _PAPER_CACHE[cache_key] = papers
         logger.info(f"[L3→Cache] {conference} {year} — {len(papers)} papers stored")
@@ -301,14 +309,16 @@ async def _build_embeddings_bg(cache_key: str, raw_papers: List[dict]):
 
 def _assign_proxy_tiers(papers: List) -> None:
     """
-    For papers with tier='arxiv' (fetched from arXiv, no OpenReview data),
-    assign citation-percentile proxy tiers so filters are usable:
-      top  5%  by citation_count → 'oral'
+    FALLBACK: For papers that still have tier='arxiv' after venue-based tier
+    resolution, apply a citation-percentile proxy within each (venue, year) group.
+    Papers confirmed via S2 venue as conference papers already have
+    oral/spotlight/poster set — those are NOT touched here.
+
+    Percentile thresholds (applied only within the arxiv-only group):
+      top  5%  → 'oral'        (very high citation traction)
       next 15% → 'spotlight'
       next 40% → 'poster'
-      bottom 40% → 'arxiv'  (kept for transparency)
-    Groups are computed per (venue, year) so 2024 vs 2025 don't skew each other.
-    Applied in-place; safe to call multiple times (idempotent for non-arxiv tiers).
+      bottom 40% → 'arxiv'    (kept to preserve "preprint / unconfirmed" signal)
     """
     from collections import defaultdict
     groups: dict = defaultdict(list)
@@ -330,6 +340,69 @@ def _assign_proxy_tiers(papers: List) -> None:
             elif i < oral_n + spotlight_n + poster_n:
                 p.tier = "poster"
             # else: keep "arxiv"
+
+
+# Semantic Scholar venue strings for each conference (lowercase substrings)
+_CONF_VENUE_KEYWORDS: dict = {
+    "ICLR":    ["iclr", "international conference on learning representations"],
+    "NEURIPS": ["neurips", "nips", "neural information processing systems"],
+    "ICML":    ["icml", "international conference on machine learning"],
+    "AAAI":    ["aaai", "association for the advancement of artificial intelligence"],
+    "ACL":     ["association for computational linguistics", " acl "],
+    "EMNLP":   ["emnlp", "empirical methods in natural language processing"],
+}
+
+
+def _resolve_tiers_from_venue(raw_papers: List[dict], conference: str) -> List[dict]:
+    """
+    Use the Semantic Scholar `publication_venue` field (set by S2 enrichment)
+    to distinguish papers *actually published* at the target conference from
+    pure arXiv preprints.
+
+    Logic:
+      1. If a paper has tier != 'arxiv' already (e.g. from OpenReview), skip it.
+      2. If S2 venue string contains a known keyword for `conference`:
+           → mark as venue-confirmed accepted.
+      3. Among venue-confirmed papers, assign oral/spotlight/poster by
+         citation-count percentile (best proxy when we lack OpenReview decisions).
+      4. Everything else stays 'arxiv' (preprint / rejected / unknown).
+
+    This runs on *raw dicts* right after S2 enrichment, before clustering and
+    before conversion to Paper objects. Results are stored in cache.
+    """
+    kws = _CONF_VENUE_KEYWORDS.get(conference.upper(), [])
+    if not kws:
+        return raw_papers
+
+    confirmed: List[dict] = []
+    for p in raw_papers:
+        if p.get("tier", "arxiv") != "arxiv":
+            continue  # Already has a real tier from OpenReview — don't override
+        venue = (p.get("publication_venue") or "").lower().strip()
+        if venue and any(kw in venue for kw in kws):
+            p["tier"] = "_venue_confirmed"   # temp marker, replaced below
+            confirmed.append(p)
+
+    if not confirmed:
+        return raw_papers
+
+    # Citation-percentile tiers within venue-confirmed papers
+    confirmed.sort(key=lambda p: p.get("citation_count", 0) or 0, reverse=True)
+    n = len(confirmed)
+    for i, p in enumerate(confirmed):
+        frac = i / n
+        if frac < 0.05:
+            p["tier"] = "oral"
+        elif frac < 0.20:
+            p["tier"] = "spotlight"
+        else:
+            p["tier"] = "poster"
+
+    logger.info(
+        f"[TierResolve] {conference}: {len(confirmed)}/{len(raw_papers)} "
+        f"papers confirmed via S2 venue → oral/spotlight/poster assigned"
+    )
+    return raw_papers
 
 
 async def _all_papers(

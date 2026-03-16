@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 FIELDS = (
     "title,year,citationCount,influentialCitationCount,"
-    "externalIds,url,publicationDate,openAccessPdf"
+    "externalIds,url,publicationDate,openAccessPdf,venue,publicationVenue"
 )
 _S2_DELAY = 1.2   # seconds between requests (free-tier is ~1/s)
 
@@ -102,6 +102,12 @@ class SemanticScholarExtractor:
         oa = s2.get("openAccessPdf") or {}
         if not paper.get("pdf_url") and oa.get("url"):
             paper["pdf_url"] = oa["url"]
+        # Publication venue — used to confirm actual conference acceptance
+        venue_str = s2.get("venue") or ""
+        if not venue_str:
+            pub_venue_obj = s2.get("publicationVenue") or {}
+            venue_str = pub_venue_obj.get("name") or ""
+        paper["publication_venue"] = venue_str.strip()
         return paper
 
     @staticmethod
