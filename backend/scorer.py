@@ -178,6 +178,25 @@ def extract_fatal_flaws(reviews: List[dict]) -> List[str]:
 # White Space detection  — structured narrative: Demand / Exists / Tried / Gap
 # ---------------------------------------------------------------------------
 
+_LIMIT_SENT_RE = re.compile(
+    r"\b(limitation|future work|we leave|we do not|we cannot|cannot handle|"
+    r"fails?\s+to|does not scale|we assume|restricted to|remains?\s+challenging|"
+    r"open question|future direction|beyond the scope|not address(?:ed)?|"
+    r"lack of|limited to|one drawback|shortcoming|open challenge|open problem|"
+    r"we note that|a key challenge|currently|however|although)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_limitations(abstract: str) -> list:
+    """Extract up to 3 sentences from an abstract that discuss limitations or future work."""
+    if not abstract:
+        return []
+    # Split on sentence-ending punctuation followed by whitespace / end
+    sentences = re.split(r"(?<=[.!?])\s+", abstract.strip())
+    hits = [s.strip() for s in sentences if len(s) > 20 and _LIMIT_SENT_RE.search(s)]
+    return hits[:3]
+
 def detect_white_spaces(all_papers: List[dict], min_papers: int = 1) -> List[dict]:
     """
     For each research cluster, produce a rich structured description:
@@ -273,6 +292,32 @@ def detect_white_spaces(all_papers: List[dict], min_papers: int = 1) -> List[dic
             for p in top_attempted
         ]
 
+        # ── Abstracts + limitations (sent to LLM for deep analysis) ─────────
+        top_for_abstracts = sorted(accepted, key=lambda x: x.get("citation_count", 0), reverse=True)[:3]
+        abstracts_sample = [
+            {
+                "title":     p.get("title", ""),
+                "year":      p.get("year"),
+                "tier":      p.get("tier"),
+                "citations": p.get("citation_count", 0),
+                "abstract":  (p.get("abstract") or "")[:800],
+                "arxiv_url": p.get("arxiv_url", ""),
+            }
+            for p in top_for_abstracts
+            if p.get("abstract")
+        ]
+
+        # Limitations extracted from accepted papers (primary) + top arXiv (secondary)
+        limitations_corpus = []
+        for p in top_for_abstracts:
+            sents = _extract_limitations(p.get("abstract") or "")
+            if sents:
+                limitations_corpus.append({"title": p.get("title", ""), "sentences": sents})
+        for p in sorted(arxiv_only, key=lambda x: x.get("citation_count", 0), reverse=True)[:2]:
+            sents = _extract_limitations(p.get("abstract") or "")
+            if sents:
+                limitations_corpus.append({"title": p.get("title", ""), "sentences": sents})
+
         # ── Gap description (rule-based; LLM will override in the endpoint) ─
         if len(accepted) == 0 and len(arxiv_only) == 0:
             gap_desc = (
@@ -335,11 +380,13 @@ def detect_white_spaces(all_papers: List[dict], min_papers: int = 1) -> List[dic
             "gap_score":       round(gap_score, 2),
             "traction_score":  round(traction, 2),
             "year_trend":      year_trend,
-            "demand_signals":  demand_signals,
-            "what_exists":     what_exists,
-            "attempted":       attempted,
-            "gap_description": gap_desc,
-            "opportunity":     opportunity,   # replaced by LLM in endpoint
+            "demand_signals":    demand_signals,
+            "what_exists":       what_exists,
+            "attempted":         attempted,
+            "abstracts_sample":  abstracts_sample,
+            "limitations_corpus": limitations_corpus,
+            "gap_description":   gap_desc,
+            "opportunity":       opportunity,   # replaced by LLM in endpoint
         })
 
     results.sort(key=lambda x: x["gap_score"] * max(x["traction_score"], 0.1), reverse=True)

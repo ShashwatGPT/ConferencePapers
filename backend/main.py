@@ -55,6 +55,9 @@ CACHE       = CacheStore(_cache_dir, ttl_days=_cache_ttl)
 from embedding_store import EmbeddingStore
 EMBEDS      = EmbeddingStore(_cache_dir)
 
+from query_graph import QueryGraph
+QUERY_GRAPH = QueryGraph(_cache_dir)
+
 import asyncio
 import re as _re
 
@@ -156,17 +159,15 @@ def _mem_key(conference: str, year: int, topic: str) -> str:
     return f"{conference.upper()}_{year}_{slug}"
 
 
-async def _fetch_year_papers(
+async def _fetch_single_topic(
     year: int,
     conference: str = "ICLR",
     topic: str | None = None,
     force_refresh: bool = False,
 ) -> List[Paper]:
     """
-    Fetch pipeline with two-level caching:
-      L1 - in-memory dict (_PAPER_CACHE), guarded per key by asyncio.Lock
-      L2 - Obsidian .md files on disk (CacheStore) — read/written in executor
-      L3 - live API calls (OpenReview → arXiv fallback → S2 enrichment)
+    Single-topic fetch pipeline (L1 → L2 → L3) for exactly ONE (conf, year, topic).
+    Called by _fetch_year_papers for each query variant.
 
     Concurrency safety:
       - One asyncio.Lock per (conf, year, topic) key prevents parallel
@@ -295,6 +296,96 @@ async def _fetch_year_papers(
         _PAPER_CACHE[cache_key] = papers
         logger.info(f"[L3→Cache] {conference} {year} — {len(papers)} papers stored")
         return papers
+
+
+async def _fetch_year_papers(
+    year: int,
+    conference: str = "ICLR",
+    topic: str | None = None,
+    force_refresh: bool = False,
+) -> List[Paper]:
+    """
+    Graph-aware RAG-Fusion fetch.
+
+    On every call:
+      1. Expand `topic` into N variants using expand_query().
+      2. Fetch each variant through _fetch_single_topic() in parallel
+         (each variant has its own L1/L2/L3 pipeline + per-key lock).
+      3. Load L1-cached papers from any graph-related keys (siblings/parent
+         from prior searches) — ZERO new API calls for those.
+      4. Register all expansion edges in QueryGraph for future reuse.
+      5. Merge + dedup across all sources; store merged result under the
+         root key in L1 so subsequent calls get the fast path.
+
+    This means:
+      - First search for Q1  → fetches Q1, Q1a, Q1b, Q1c, Q1d from API
+      - Later search for Q1b → Q1b is L2 hit; sibling Q1, Q1a, Q1c, Q1d
+        are loaded from L1 for free; Q1b is expanded into NEW Q1b-v1, Q1b-v2
+        which are L3 fetched; RRF runs across all keys.
+    """
+    if topic is None:
+        topic = FOCUS_TOPIC
+    root_key = _mem_key(conference, year, topic)
+    loop = asyncio.get_event_loop()
+
+    # ── L1 fast path for the merged root result ──────────────────────────────
+    if not force_refresh and root_key in _PAPER_CACHE:
+        logger.debug(f"[L1 HIT root] {conference} {year} '{topic}'")
+        return _PAPER_CACHE[root_key]
+
+    # ── Expand topic into variants ────────────────────────────────────────────
+    variants: List[str] = await loop.run_in_executor(None, expand_query, topic, 4)
+    # variants[0] == topic (original always first)
+    child_variants = variants[1:]  # the generated expansions
+    child_keys     = [_mem_key(conference, year, v) for v in child_variants]
+
+    # ── Fetch all variants concurrently (L1/L2/L3 each, independent locks) ───
+    all_variant_tasks = [_fetch_single_topic(year, conference, v, force_refresh) for v in variants]
+    variant_results = await asyncio.gather(*all_variant_tasks, return_exceptions=True)
+
+    # ── Load graph-related keys already in L1 (no API calls) ─────────────────
+    related_graph_keys = await loop.run_in_executor(None, QUERY_GRAPH.get_related_keys, root_key)
+    all_variant_key_set = {_mem_key(conference, year, v) for v in variants}
+    graph_extra: List[Paper] = []
+    for gk in related_graph_keys:
+        if gk not in all_variant_key_set and gk in _PAPER_CACHE:
+            graph_extra.extend(_PAPER_CACHE[gk])
+            logger.debug(f"[QueryGraph] Loaded {len(_PAPER_CACHE[gk])} papers from graph neighbor {gk!r}")
+
+    # ── Register expansion edges in graph ────────────────────────────────────
+    if child_keys:
+        await loop.run_in_executor(
+            None,
+            QUERY_GRAPH.register_root,
+            root_key, topic, conference, year, child_keys, child_variants,
+        )
+
+    # ── Merge + dedup across variants + graph neighbors ──────────────────────
+    all_flat: List[Paper] = list(graph_extra)
+    for r in variant_results:
+        if isinstance(r, list):
+            all_flat.extend(r)
+        elif isinstance(r, Exception):
+            logger.warning(f"[_fetch_year_papers] variant fetch error: {r}")
+
+    seen_ids: set = set()
+    merged: List[Paper] = []
+    for p in all_flat:
+        pid = getattr(p, "id", None)
+        if pid and pid not in seen_ids:
+            seen_ids.add(pid)
+            merged.append(p)
+        elif not pid:
+            merged.append(p)  # keep if no id (shouldn't happen, but safe)
+
+    merged.sort(key=lambda p: p.relevance_score, reverse=True)
+    _PAPER_CACHE[root_key] = merged
+    logger.info(
+        f"[RAG-Fusion] {conference} {year} '{topic}' "
+        f"→ {len(variants)} variants + {len(graph_extra)} graph-neighbor papers "
+        f"→ {len(merged)} unique merged"
+    )
+    return merged
 
 
 async def _build_embeddings_bg(cache_key: str, raw_papers: List[dict]):
@@ -777,52 +868,105 @@ async def get_white_spaces(
     loop = asyncio.get_event_loop()
 
     def _llm_narrative(ws: dict) -> str | None:
-        """Generate a 3-sentence narrative: DEMAND / EXISTS / GAP."""
+        """
+        Generate a 3-section analysis grounded in actual abstracts and
+        author-identified limitations.  Returns text with labelled sections:
+          DONE: ...
+          CHALLENGES: ...
+          OPPORTUNITY: ...
+        """
         try:
             from query_expander import _get_llm
             llm = _get_llm()
             if not llm or llm is False:
                 return None
 
-            exists_lines = "\n".join(
-                f'  • "{p["title"][:80]}" ({p["year"]}, {p["tier"]}, {p["citations"]} cit.)'
-                for p in ws["what_exists"]
-            ) or "  • (no accepted papers in this cluster)"
+            # ── Format accepted papers WITH abstract snapshots ───────────────
+            exists_blocks = []
+            for p in ws.get("what_exists", []):
+                abst_snippet = ""
+                for a in ws.get("abstracts_sample", []):
+                    if a["title"] == p["title"] and a.get("abstract"):
+                        abst_snippet = a["abstract"][:500]
+                        break
+                block = (
+                    f'  • "{p["title"][:90]}" ({p.get("year","?")}, {p.get("tier","?")}, '
+                    f'{p.get("citations",0)} cit.)'
+                )
+                if abst_snippet:
+                    block += f'\n    ↳ Abstract: {abst_snippet}'
+                exists_blocks.append(block)
+            exists_text = "\n".join(exists_blocks) or "  • (no accepted papers in this cluster)"
 
-            tried_lines = "\n".join(
-                f'  • "{p["title"][:80]}" ({p["year"]}, arXiv, {p["citations"]} cit.)'
-                for p in ws["attempted"]
+            # ── arXiv attempts ───────────────────────────────────────────────
+            tried_text = "\n".join(
+                f'  • "{p["title"][:90]}" ({p.get("year","?")}, arXiv, {p.get("citations",0)} cit.)'
+                for p in ws.get("attempted", [])
             ) or "  • (no arXiv attempts found)"
 
+            # ── Limitations extracted from abstracts ─────────────────────────
+            limit_lines = []
+            for item in ws.get("limitations_corpus", []):
+                for sent in item.get("sentences", []):
+                    limit_lines.append(f'  • [{item["title"][:60]}]: "{sent.strip()}"')
+            limitations_text = (
+                "\n".join(limit_lines[:6])
+                or "  • (no explicit limitation sentences detected in abstracts)"
+            )
+
+            # ── GitHub + year trend ──────────────────────────────────────────
+            stars = ws.get("total_stars", 0)
+            github_str = f"{stars} total GitHub ⭐ across cluster" if stars > 0 else "no GitHub star data"
+            year_trend = ws.get("year_trend", {})
+            if len(year_trend) >= 2:
+                vals = list(year_trend.values())
+                direction = "rising" if vals[-1] > vals[0] else "declining"
+                trend_str = (
+                    f"publications {direction} "
+                    f"({', '.join(f'{y}: {n}' for y, n in year_trend.items())})"
+                )
+            else:
+                trend_str = "limited year-over-year data"
+
             prompt = f"""\
-You are a research strategy analyst for ML/NLP conferences (ICLR, NeurIPS, ICML).
+You are a research strategy analyst specialising in venue strategy for ICLR, NeurIPS, and ICML.
 
 Research cluster: "{ws['cluster_label']}"
-Stats: {ws['paper_count']} papers total | {ws['accepted_count']} accepted at top venues | {ws['arxiv_count']} arXiv-only (tried, not accepted)
-Avg citations: {ws['avg_citations']} | Citation velocity: {ws['avg_velocity']} cit/month | Gap score: {ws['gap_score']}× (>1 means sparse vs average cluster)
-Demand signals: {', '.join(ws['demand_signals'])}
+Stats: {ws['paper_count']} papers total | {ws['accepted_count']} accepted at top venues | {ws['arxiv_count']} arXiv-only
+Avg citations: {ws['avg_citations']} | Citation velocity: {ws['avg_velocity']} cit/month
+GitHub: {github_str} | Trend: {trend_str}
+Gap score: {ws['gap_score']}× above average sparsity (higher = more room for new work)
+Demand signals: {', '.join(ws.get('demand_signals', []))}
 
-Accepted papers in this cluster (what EXISTS — "Y has been done"):
-{exists_lines}
+══ ACCEPTED PAPERS — what has been published and accepted ══
+{exists_text}
 
-arXiv-only papers (TRIED but not accepted — "Z' was attempted"):
-{tried_lines}
+══ ARXIV-ONLY — attempted but not accepted at top venues ══
+{tried_text}
 
-Write exactly 3 concise sentences (no bullet points, no labels, plain flowing text):
-1. State the research demand — what real-world or theoretical need drives interest here (cite the signal: citations, velocity, trend).
-2. State what has already been published — name 1-2 accepted papers and what sub-problem they solve.
-3. State the precise gap — what has NOT been solved, why arXiv attempts fell short (if any), and what a strong paper could do next.
+══ AUTHOR-IDENTIFIED LIMITATIONS & FUTURE WORK (extracted directly from paper abstracts) ══
+{limitations_text}
 
-Be specific and concrete. Max 55 words per sentence. Do not use phrases like "In conclusion" or "Overall"."""
+Write a structured analysis with EXACTLY these three labelled sections.
+Be concrete — cite specific paper titles, quote specific limitations, and name specific methods.
+
+DONE: What the accepted papers actually accomplished. Name specific papers, their methods, and the sub-problems they solved. What benchmarks or results did they demonstrate? 2–3 sentences.
+
+CHALLENGES: The specific unsolved challenges. Draw directly from the limitations above — quote or closely paraphrase author-stated problems. Explain why the arXiv attempts likely failed to get accepted (missing theory, narrow scope, no rigorous ablations, etc.). 2–3 sentences with concrete specifics.
+
+OPPORTUNITY: A concrete, actionable research opportunity a researcher could pursue tomorrow. State the exact gap, the specific approach or method that would address it, why it would satisfy reviewers at ICLR/NeurIPS/ICML (theoretical depth, generalization, novel benchmark, etc.), and the expected contribution type (new framework / theorem / benchmark / empirical study). 3–4 sentences."""
 
             raw, _ = llm.call_llm_with_retry(
                 user_message=prompt,
-                system_message="You are a concise, precise research strategy analyst. Output only the 3 sentences — no preamble, no labels.",
+                system_message=(
+                    "You are a precise research strategy analyst. "
+                    "Output ONLY the three labelled sections: DONE:, CHALLENGES:, OPPORTUNITY: "
+                    "— no preamble, no bullet points inside sections, no extra commentary."
+                ),
             )
             if raw is None:
                 return None
-            text = raw if isinstance(raw, str) else str(raw)
-            return text.strip()
+            return raw.strip() if isinstance(raw, str) else str(raw).strip()
         except Exception as exc:
             logger.warning(f"[WhiteSpace] LLM narrative failed: {exc}")
             return None
@@ -965,7 +1109,8 @@ async def refresh_cache(
     _FUNNEL_CACHE = None
     if disk and _cache_on:
         removed = CACHE.invalidate_all()
-        logger.info(f"[Refresh] Invalidated {removed} disk cache files")
+        QUERY_GRAPH.clear()  # graph nodes are invalid once cache files are gone
+        logger.info(f"[Refresh] Invalidated {removed} disk cache files + cleared query graph")
     for year in YEARS:
         background_tasks.add_task(_fetch_year_papers, year, True)
     return {"message": "Cache cleared. Re-fetching in background.", "disk_cleared": disk}
@@ -1037,16 +1182,21 @@ async def get_stats():
 @app.on_event("startup")
 async def startup_event():
     """
-    Startup: log readiness only.  No pre-warming — all fetches are demand-driven
-    once the user submits a search from the frontend.
+    Startup: reconcile query graph with existing cache files, then log readiness.
+    No pre-warming — all fetches are demand-driven once the user submits a search.
 
     Parallelism model (already in place):
       • asyncio.gather()      — concurrent (conference × year) tasks
       • loop.run_in_executor() — thread-pool for blocking arXiv / OpenReview SDKs
       • Per-key asyncio.Lock  — prevents thundering-herd duplicate L3 fetches
       • CPU-heavy work (clustering, UMAP, embeddings) also runs in executor
+      • QueryGraph            — cross-search graph-neighbor reuse for RAG-Fusion
     """
-    logger.info("🚀 ConferencePapers backend ready — waiting for user search requests.")
+    # Reconcile query graph: drop nodes whose .md files were manually deleted
+    existing_keys = {p.stem for p in _cache_dir.glob("*.md") if not p.name.startswith("_")}
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, QUERY_GRAPH.reconcile, existing_keys)
+    logger.info(f"🚀 ConferencePapers backend ready — {len(QUERY_GRAPH)} query graph nodes loaded.")
 
 
 if __name__ == "__main__":

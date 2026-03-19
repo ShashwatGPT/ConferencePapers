@@ -197,6 +197,7 @@ class CacheStore:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl_days = ttl_days
         logger.info(f"[Cache] dir={self.cache_dir}  ttl={ttl_days}d")
+        self._reconcile_index()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -313,6 +314,8 @@ class CacheStore:
             if not md_file.name.startswith("_"):
                 md_file.unlink()
                 count += 1
+        for npz_file in self.cache_dir.glob("*.npz"):
+            npz_file.unlink()
         (self.cache_dir / self.INDEX_FILE).write_text(self._empty_index(), encoding="utf-8")
         logger.info(f"[Cache INVALIDATE_ALL] {count} files removed")
         return count
@@ -400,6 +403,25 @@ class CacheStore:
         text = index_path.read_text(encoding="utf-8")
         text = re.sub(rf"^\|.*`{re.escape(key)}`.*\n", "", text, flags=re.MULTILINE)
         index_path.write_text(text, encoding="utf-8")
+
+    def _reconcile_index(self):
+        """Remove index rows whose .md files no longer exist on disk."""
+        index_path = self.cache_dir / self.INDEX_FILE
+        if not index_path.exists():
+            return
+        text = index_path.read_text(encoding="utf-8")
+        existing_stems = {p.stem for p in self.cache_dir.glob("*.md") if not p.name.startswith("_")}
+        # Find all keys referenced in index rows and drop rows for missing files
+        def _keep_row(line: str) -> bool:
+            m = re.search(r"\[\[([^\]]+)\]\]", line)
+            if m and line.startswith("|"):
+                return m.group(1) in existing_stems
+            return True
+        new_lines = [l for l in text.splitlines(keepends=True) if _keep_row(l)]
+        new_text = "".join(new_lines)
+        if new_text != text:
+            index_path.write_text(new_text, encoding="utf-8")
+            logger.info("[Cache] _index.md reconciled — stale entries removed")
 
     @staticmethod
     def _count_rows(text: str) -> int:

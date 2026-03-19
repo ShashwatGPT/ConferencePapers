@@ -76,7 +76,7 @@ class EmbeddingStore:
             return False
 
         texts  = [
-            (p.get("title", "") + ". " + (p.get("abstract", "") or "")[:300]).strip()
+            (p.get("title", "") + ". " + (p.get("abstract", "") or "")).strip()
             for p in papers
         ]
         ids    = [p.get("id", str(i)) for i, p in enumerate(papers)]
