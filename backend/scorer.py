@@ -804,6 +804,70 @@ DEFAULT_PIVOT = (
 
 
 def generate_pivot(idea: str, config: dict) -> dict:
+    """
+    Return a pivot-analysis dict for the given idea.  Tries LLM first (via
+    ~/Project/MODEL), falls back to keyword-template matching.
+    """
+    # ── 1. Try LLM-backed pivot ──────────────────────────────────────────────
+    try:
+        if str(_PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(_PROJECT_ROOT))
+        from MODEL.models import Model
+        import json as _json
+
+        # Respect config / env for endpoint; default to ghcp
+        llm_name = config.get("llm", {}).get("model_name", "gpt-4.1")
+        llm_ep   = config.get("llm", {}).get("model_endpoint", "ghcp") or None
+        import os
+        llm_name = os.environ.get("LLM_MODEL_NAME", llm_name)
+        llm_ep   = os.environ.get("LLM_MODEL_ENDPOINT", llm_ep or "") or llm_ep
+
+        kwargs: dict = {}
+        if llm_ep:
+            kwargs["model_endpoint"] = llm_ep
+        llm = Model(llm_name, **kwargs)
+
+        system = (
+            "You are a venue-strategy advisor for top ML conferences (ICLR, ICML, NeurIPS). "
+            "Given a research idea, assess its fit and suggest a pivot. "
+            "Respond ONLY with a JSON object — no markdown, no code fences."
+        )
+        prompt = f"""\
+Research idea: "{idea}"
+
+Analyse:
+1. iclr_flavor_score (0.0-1.0): how well does this fit ICLR's taste for representations, scaling, theory?
+2. verdict: 1-sentence assessment of reviewer reception.
+3. fatal_flaw: the most likely rejection reason, citing rejection rates if applicable.
+4. pivot_suggestion: a concrete re-framing with a specific paper title suggestion.
+5. theoretical_framing: how to ground it theoretically (bounds, proofs, formalisms).
+
+JSON schema:
+{{"iclr_flavor_score": float, "verdict": str, "fatal_flaw": str, "pivot_suggestion": str, "theoretical_framing": str}}"""
+
+        raw, _ = llm.call_llm_with_retry(
+            user_message=prompt,
+            system_message=system,
+            max_retries=3,
+            base_delay=1,
+        )
+        if raw:
+            text = raw.strip() if isinstance(raw, str) else getattr(raw, "content", str(raw)).strip()
+            import re as _re
+            text = _re.sub(r"^```(?:json)?\s*", "", text)
+            text = _re.sub(r"\s*```$", "", text)
+            parsed = _json.loads(text)
+            # Validate required keys
+            for k in ("iclr_flavor_score", "verdict", "fatal_flaw", "pivot_suggestion", "theoretical_framing"):
+                if k not in parsed:
+                    raise KeyError(f"missing {k}")
+            parsed["iclr_flavor_score"] = float(parsed["iclr_flavor_score"])
+            logger.info("[Scorer] LLM pivot generated")
+            return parsed
+    except Exception as exc:
+        logger.info(f"[Scorer] LLM pivot unavailable ({exc}); using templates")
+
+    # ── 2. Template fallback ─────────────────────────────────────────────────
     idea_lower = idea.lower()
     for kws, flavor, verdict, flaw, pivot, framing in PIVOT_TEMPLATES:
         if any(kw in idea_lower for kw in kws):

@@ -59,6 +59,9 @@ from query_graph import QueryGraph
 QUERY_GRAPH = QueryGraph(_cache_dir)
 
 from citation_crawler import CitationCrawler
+from paper_fetcher import PaperFetcher
+from limitation_analyser import analyse_cluster_limitations
+PAPER_FETCHER = PaperFetcher(_cache_dir)
 
 import asyncio
 import re as _re
@@ -880,13 +883,98 @@ async def get_white_spaces(
     raw_dicts    = [p.dict() for p in all_papers]
     white_spaces = detect_white_spaces(raw_dicts)
 
+    # ── Full-text fetch for top clusters ────────────────────────────────────
+    # Build a paper_id → raw_dict map for quick lookup
+    raw_dict_map = {p.get("id", ""): p for p in raw_dicts if p.get("id")}
+    top_ws = white_spaces[:min(6, len(white_spaces))]
+
+    # Collect unique papers referenced across top clusters
+    papers_to_fetch: list[dict] = []
+    _seen_fetch: set[str] = set()
+    for ws in top_ws:
+        for entry in ws.get("what_exists", []) + ws.get("attempted", []):
+            pid = entry.get("id", "")
+            if pid and pid not in _seen_fetch and pid in raw_dict_map:
+                papers_to_fetch.append(raw_dict_map[pid])
+                _seen_fetch.add(pid)
+
+    # Fetch PDFs concurrently (cached on disk — fast on repeat calls)
+    full_text_map: dict[str, dict] = {}
+    if papers_to_fetch:
+        try:
+            from query_expander import _get_llm as _gllm
+            _ft_llm = _gllm()
+            full_text_map = await PAPER_FETCHER.fetch_many(
+                papers_to_fetch, concurrency=4, llm=_ft_llm
+            )
+            logger.info(f"[WhiteSpaces] Full-text fetched for {len(full_text_map)}/{len(papers_to_fetch)} papers")
+        except Exception as _fte:
+            logger.warning(f"[WhiteSpaces] Full-text fetch error: {_fte}")
+
+    # ── Stage 1+2: cluster-level limitation synthesis + solved-status ────────
+    # Run for top clusters in parallel; uses PaperFetcher full-text + S2 + LLM
+    _s2_base  = CONFIG["apis"]["semantic_scholar"]["base_url"]
+    _perp_url = CONFIG.get("perplexica", {}).get("base_url") or None
+
+    async def _analyse_ws(ws: dict) -> dict:
+        try:
+            from query_expander import _get_llm as _gllm2
+            _llm2 = _gllm2()
+            if not _llm2 or _llm2 is False:
+                ws["full_text_available"] = False
+                return ws
+
+            # Gather the raw paper dicts for this cluster
+            cluster_pids = {
+                e.get("id", "") for e in ws.get("what_exists", []) + ws.get("attempted", [])
+            }
+            cluster_raw = [raw_dict_map[pid] for pid in cluster_pids if pid in raw_dict_map]
+
+            analysed = await analyse_cluster_limitations(
+                ft_map=full_text_map,
+                cluster_papers=cluster_raw,
+                cluster_label=ws["cluster_label"],
+                s2_base_url=_s2_base,
+                llm=_llm2,
+                perplexica_base_url=_perp_url,
+            )
+            if analysed:
+                ws["analysed_limitations"]  = analysed
+                ws["full_text_available"]   = True
+                # Also update legacy limitations_corpus so _llm_narrative picks it up
+                ws["limitations_corpus"] = [
+                    {
+                        "title":     ", ".join(lim.get("papers_stating", [])[:2]),
+                        "sentences": [lim["statement"]],
+                        "source":    "analysed",
+                        "metric":    lim.get("metric"),
+                        "category":  lim.get("category"),
+                        "solved_status":  lim.get("solved_status", "open"),
+                        "solved_summary": lim.get("solved_summary", ""),
+                        "solving_papers": lim.get("solving_papers", []),
+                    }
+                    for lim in analysed
+                ]
+            else:
+                ws["full_text_available"] = False
+        except Exception as _ae:
+            logger.warning(f"[WhiteSpaces] Limitation analysis error for {ws.get('cluster_label')!r}: {_ae}")
+            ws["full_text_available"] = False
+        return ws
+
+    # Run limitation analysis for top 6 clusters in parallel
+    if top_ws:
+        analysed_ws = await asyncio.gather(*[_analyse_ws(ws) for ws in top_ws])
+        white_spaces[:len(top_ws)] = list(analysed_ws)
+
     # ── LLM narrative enrichment (top 6 results, parallel) ──────────────────
     loop = asyncio.get_event_loop()
 
     def _llm_narrative(ws: dict) -> str | None:
         """
-        Generate a 3-section analysis grounded in actual abstracts and
-        author-identified limitations.  Returns text with labelled sections:
+        Generate a 3-section analysis grounded in actual abstracts,
+        full-text limitations, and solved-status data.
+        Returns text with labelled sections:
           DONE: ...
           CHALLENGES: ...
           OPPORTUNITY: ...
@@ -920,15 +1008,63 @@ async def get_white_spaces(
                 for p in ws.get("attempted", [])
             ) or "  • (no arXiv attempts found)"
 
-            # ── Limitations extracted from abstracts ─────────────────────────
-            limit_lines = []
-            for item in ws.get("limitations_corpus", []):
-                for sent in item.get("sentences", []):
-                    limit_lines.append(f'  • [{item["title"][:60]}]: "{sent.strip()}"')
-            limitations_text = (
-                "\n".join(limit_lines[:6])
-                or "  • (no explicit limitation sentences detected in abstracts)"
-            )
+            # ── Render rich analysed_limitations (preferred) ─────────────────
+            analysed_lims: list[dict] = ws.get("analysed_limitations", [])
+            if analysed_lims:
+                lim_blocks = []
+                for lim in analysed_lims:
+                    stmt   = lim["statement"]
+                    metric = lim.get("metric") or ""
+                    cat    = lim.get("category", "")
+                    status = lim.get("solved_status", "open")
+                    summary = lim.get("solved_summary", "")
+                    solvers = lim.get("solving_papers", [])
+
+                    block = f'  [{cat}] {stmt}'
+                    if metric:
+                        block += f' [{metric}]'
+                    block += f'\n    Status: {status}'
+                    if summary:
+                        block += f' — {summary}'
+                    if solvers:
+                        for s in solvers[:3]:
+                            how = s.get("how", "")
+                            block += f'\n      → "{s["title"]}" ({s.get("year","?")}): {how}'
+                    lim_blocks.append(block)
+                limitations_text = "\n".join(lim_blocks)
+                lim_source_label = "SYNTHESISED LIMITATIONS (specific, with solved-status)"
+            else:
+                # Fall back to legacy limitations_corpus
+                limit_blocks = []
+                for item in ws.get("limitations_corpus", []):
+                    is_analysed = item.get("source") == "analysed"
+                    sents = item.get("sentences", [])
+                    if is_analysed and sents:
+                        stmt = sents[0]
+                        status = item.get("solved_status", "open")
+                        limit_blocks.append(f'  [{item.get("category","?")}] {stmt}  → {status}')
+                    elif item.get("source") == "full_text" and sents:
+                        block_text = sents[0]
+                        limit_blocks.append(
+                            f'  [{item["title"][:70]}]\n'
+                            f'  --- Limitations/Future Work (from PDF) ---\n'
+                            f'{block_text[:1500]}\n'
+                        )
+                        conc = item.get("conclusion", "")
+                        if conc:
+                            limit_blocks.append(f'  --- Conclusion ---\n{conc}\n')
+                    else:
+                        for sent in sents:
+                            limit_blocks.append(f'  • [{item["title"][:60]}]: "{sent.strip()}"')
+                limitations_text = (
+                    "\n".join(limit_blocks)
+                    or "  • (no limitation text found — abstract-only)"
+                )
+                lim_source_label = (
+                    "LIMITATIONS & FUTURE WORK (full PDF sections)"
+                    if ws.get("full_text_available")
+                    else "LIMITATIONS (extracted from abstracts)"
+                )
 
             # ── GitHub + year trend ──────────────────────────────────────────
             stars = ws.get("total_stars", 0)
@@ -960,17 +1096,18 @@ Demand signals: {', '.join(ws.get('demand_signals', []))}
 ══ ARXIV-ONLY — attempted but not accepted at top venues ══
 {tried_text}
 
-══ AUTHOR-IDENTIFIED LIMITATIONS & FUTURE WORK (extracted directly from paper abstracts) ══
+══ {lim_source_label} ══
 {limitations_text}
 
 Write a structured analysis with EXACTLY these three labelled sections.
 Be concrete — cite specific paper titles, quote specific limitations, and name specific methods.
+For solved limitations, explicitly note which problems are now addressed and which remain open.
 
 DONE: What the accepted papers actually accomplished. Name specific papers, their methods, and the sub-problems they solved. What benchmarks or results did they demonstrate? 2–3 sentences.
 
-CHALLENGES: The specific unsolved challenges. Draw directly from the limitations above — quote or closely paraphrase author-stated problems. Explain why the arXiv attempts likely failed to get accepted (missing theory, narrow scope, no rigorous ablations, etc.). 2–3 sentences with concrete specifics.
+CHALLENGES: The specific OPEN unsolved challenges. For each limitation marked as 'open' or 'ongoing' above, explain the concrete problem with exact numbers and failure modes. For 'partially_solved' items, note what part remains. Explain why the arXiv attempts likely failed. 3–4 sentences with specifics.
 
-OPPORTUNITY: A concrete, actionable research opportunity a researcher could pursue tomorrow. State the exact gap, the specific approach or method that would address it, why it would satisfy reviewers at ICLR/NeurIPS/ICML (theoretical depth, generalization, novel benchmark, etc.), and the expected contribution type (new framework / theorem / benchmark / empirical study). 3–4 sentences."""
+OPPORTUNITY: A concrete, actionable research opportunity a researcher could pursue tomorrow. State the exact gap, name the specific unsolved limitation to target, the specific approach or method, why it would satisfy reviewers at ICLR/NeurIPS/ICML, and the expected contribution type (new framework / theorem / benchmark / empirical study). 3–4 sentences."""
 
             raw, _ = llm.call_llm_with_retry(
                 user_message=prompt,

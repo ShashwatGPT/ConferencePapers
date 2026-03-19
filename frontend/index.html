@@ -1397,10 +1397,57 @@ function renderWhiteSpaces(data) {
     if (doneM)  sections.done        = doneM[1].trim();
     if (challM) sections.challenges  = challM[1].trim();
     if (oppM)   sections.opportunity = oppM[1].trim();
-    // If none matched (old 3-sentence format), fall back to showing raw text
     if (!sections.done && !sections.challenges && !sections.opportunity)
       return { fallback: text };
     return sections;
+  }
+
+  // Status badge for a solved limitation
+  const _statusBadge = s => {
+    const map = {
+      fully_solved:    { bg:'#14532d', color:'#86efac', label:'✅ Fully Solved' },
+      partially_solved:{ bg:'#422006', color:'#fdba74', label:'🔶 Partially Solved' },
+      ongoing:         { bg:'#1e3a5f', color:'#93c5fd', label:'🔄 Ongoing' },
+      open:            { bg:'#2d1b4e', color:'#c4b5fd', label:'🔴 Open' },
+    };
+    const s2 = (s||'open').toLowerCase();
+    const c = map[s2] || map.open;
+    return `<span class="text-xs px-1.5 py-0.5 rounded font-medium" style="background:${c.bg};color:${c.color}">${c.label}</span>`;
+  };
+
+  // Render analysed_limitations table
+  function _renderAnalysedLimitations(limitations) {
+    if (!limitations || !limitations.length) return '';
+    const rows = limitations.map(lim => {
+      const metric   = lim.metric ? `<span class="text-indigo-300"> [${lim.metric}]</span>` : '';
+      const catBadge = `<span class="text-xs px-1 py-0.5 rounded" style="background:#1e293b;color:#94a3b8;font-size:10px">${lim.category||'scope'}</span>`;
+      const status   = _statusBadge(lim.solved_status);
+      const summary  = lim.solved_summary
+        ? `<p class="text-xs text-slate-400 mt-1 italic">${lim.solved_summary}</p>` : '';
+      const solvers  = (lim.solving_papers||[]).slice(0,3).map(sp => {
+        const yr = sp.year ? ` (${sp.year})` : '';
+        const link = sp.url
+          ? `<a href="${sp.url}" target="_blank" rel="noopener" class="text-indigo-300 hover:text-indigo-200">${sp.title}${yr}</a>`
+          : `${sp.title}${yr}`;
+        const how = sp.how ? ` — <span class="text-slate-400">${sp.how}</span>` : '';
+        return `<div class="text-xs mt-0.5">↳ ${link}${how}</div>`;
+      }).join('');
+
+      return `<div class="rounded px-3 py-2 mb-2" style="background:#0f172a;border-left:3px solid #334155">
+        <div class="flex items-start gap-2 flex-wrap mb-1">
+          ${catBadge} ${status}
+        </div>
+        <p class="text-sm text-slate-200 leading-snug">${lim.statement}${metric}</p>
+        ${summary}
+        ${solvers ? `<div class="mt-1.5 pl-1 border-l border-slate-700">${solvers}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    return `
+      <div class="mt-3">
+        <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">🔍 Specific Limitations &amp; Solved Status</div>
+        ${rows}
+      </div>`;
   }
 
   $('whiteSpaceCards').innerHTML = ws.slice(0, 8).map((w, i) => {
@@ -1482,6 +1529,9 @@ function renderWhiteSpaces(data) {
 
       <!-- Deep Analysis (3-section LLM output) -->
       ${opportunityHtml}
+
+      <!-- Specific limitations with solved-status (two-stage analysis) -->
+      ${_renderAnalysedLimitations(w.analysed_limitations)}
     </div>`;
   }).join('');
 
