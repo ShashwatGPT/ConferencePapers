@@ -58,6 +58,8 @@ EMBEDS      = EmbeddingStore(_cache_dir)
 from query_graph import QueryGraph
 QUERY_GRAPH = QueryGraph(_cache_dir)
 
+from citation_crawler import CitationCrawler
+
 import asyncio
 import re as _re
 
@@ -114,7 +116,7 @@ if FRONTEND_DIR.exists():
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _raw_to_paper(raw: dict, accepted_density: float = 1.0) -> Paper:
+def _raw_to_paper(raw: dict, accepted_density: float = 1.0, *, topic: str | None = None) -> Paper:
     """Convert a raw dict (from extractor) to a typed Paper model."""
     reviews = raw.get("reviews", [])
     rstats  = compute_reviewer_stats(reviews)
@@ -141,7 +143,7 @@ def _raw_to_paper(raw: dict, accepted_density: float = 1.0) -> Paper:
         impact_niche_score  = compute_impact_niche(raw, accepted_density),
         iclr_flavor_score   = compute_iclr_flavor(raw, CONFIG),
         keywords            = raw.get("keywords", []),
-        relevance_score     = compute_relevance(raw, KEYWORDS, ANTI_KEYWORDS),
+        relevance_score     = compute_relevance(raw, KEYWORDS, ANTI_KEYWORDS, topic=topic),
         reviewer_stats      = ReviewerStats(**rstats),
         embedding_x         = raw.get("embedding_x", 0.0),
         embedding_y         = raw.get("embedding_y", 0.0),
@@ -204,7 +206,7 @@ async def _fetch_single_topic(
                 # and conference papers already stored with correct tier in cache).
                 cached_raw = _resolve_tiers_from_venue(list(cached_raw), conference)
                 accepted_density = max(len(cached_raw), 1)
-                papers = [_raw_to_paper(r, accepted_density) for r in cached_raw]
+                papers = [_raw_to_paper(r, accepted_density, topic=topic) for r in cached_raw]
                 _assign_proxy_tiers(papers)   # fallback proxy for remaining "arxiv"
                 papers.sort(key=lambda p: p.relevance_score, reverse=True)
                 _PAPER_CACHE[cache_key] = papers   # atomic dict assignment (GIL)
@@ -266,10 +268,24 @@ async def _fetch_single_topic(
         #        Must run BEFORE clustering so tier is stored in cache.
         raw_papers = _resolve_tiers_from_venue(raw_papers, conference)
 
+        # 3c-iii. Citation-traversal (PASA-style) — extend corpus by following
+        #          references of high-quality papers, scored by LLM Selector,
+        #          stopping when Coverage Judge says coverage is sufficient.
+        try:
+            crawler = CitationCrawler(CONFIG, s2)
+            raw_papers = await crawler.crawl(
+                raw_papers,
+                query=topic or FOCUS_TOPIC,
+                conferences=[conference],
+                year=year,
+            )
+        except Exception as _e:
+            logger.warning(f"[CitationCrawler] Skipped due to error: {_e}")
+
         # 3d. Filter + cluster (CPU-heavy — run in executor)
         def _cluster_and_filter(papers):
             relevant = [p for p in papers
-                        if compute_relevance(p, KEYWORDS, ANTI_KEYWORDS) > 0.05]
+                        if compute_relevance(p, KEYWORDS, ANTI_KEYWORDS, topic=topic) > 0.05]
             if not relevant:
                 relevant = papers
             return compute_clusters_and_embeddings(
@@ -290,7 +306,7 @@ async def _fetch_single_topic(
         asyncio.create_task(_build_embeddings_bg(cache_key, relevant))
 
         # ── Populate L1 (atomic assignment) ──────────────────────────────────
-        papers = [_raw_to_paper(r, accepted_density) for r in relevant]
+        papers = [_raw_to_paper(r, accepted_density, topic=topic) for r in relevant]
         _assign_proxy_tiers(papers)   # fallback proxy only for remaining "arxiv" papers
         papers.sort(key=lambda p: p.relevance_score, reverse=True)
         _PAPER_CACHE[cache_key] = papers

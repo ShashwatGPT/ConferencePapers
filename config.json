@@ -91,5 +91,14 @@
     "dir": "cache",
     "ttl_days": 7,
     "comment": "Each (conference, year, topic) query is stored as an Obsidian-style .md file. Set ttl_days=0 to never expire."
+  },
+  "crawler": {
+    "max_rounds": 2,
+    "max_total_papers": 300,
+    "expand_top_n": 20,
+    "selector_threshold": 0.45,
+    "batch_llm_size": 10,
+    "min_citations": 5,
+    "comment": "CitationCrawler (PASA-style) config. max_rounds=iterative hops, expand_top_n=papers expanded per round, selector_threshold=LLM score cutoff (0-1)."
   }
 }

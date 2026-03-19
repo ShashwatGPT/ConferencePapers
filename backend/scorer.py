@@ -37,20 +37,88 @@ def _get_dense_vecs(texts: List[str]):
 
 
 # ---------------------------------------------------------------------------
-# Relevance Score
+# Relevance Score  — embedding cosine similarity + LLM fallback
+# ---------------------------------------------------------------------------
+# We pre-encode a "query anchor" from the topic keywords once per process,
+# then score each paper as cosine(paper_vec, anchor_vec).
+# Falls back to TF-IDF keyword hit-count when embeddings are unavailable.
 # ---------------------------------------------------------------------------
 
-def compute_relevance(paper: dict, keywords: List[str], anti_keywords: List[str]) -> float:
-    text = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
-    kw_text = " ".join(paper.get("keywords", [])).lower()
-    full = text + " " + kw_text
+_QUERY_VEC_CACHE: dict = {}  # topic_str → L2-normalised ndarray
 
-    hits = sum(1 for kw in keywords if kw.lower() in full)
-    anti = sum(1 for kw in anti_keywords if kw.lower() in full)
 
-    # Normalise over a realistic cap (paper can't match all 30+ keywords)
+def _get_query_vec(topic: str):
+    """Return (and cache) the embedding vector for `topic`."""
+    if topic in _QUERY_VEC_CACHE:
+        return _QUERY_VEC_CACHE[topic]
+    try:
+        model = _get_dense_vecs([topic])  # re-uses the same singleton
+        if model is not None:
+            import numpy as np
+            vec = model[0]
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            _QUERY_VEC_CACHE[topic] = vec
+            return vec
+    except Exception:
+        pass
+    return None
+
+
+def compute_relevance(
+    paper: dict,
+    keywords: List[str],
+    anti_keywords: List[str],
+    topic: Optional[str] = None,
+) -> float:
+    """
+    Relevance score in [0, 1].
+
+    Primary path (when embeddings available):
+      Cosine similarity between paper's title+abstract vector and the
+      query-topic anchor vector, soft-clamped to [0.25, 1.0] range and
+      rescaled to [0, 1].  Anti-keywords still apply a penalty.
+
+    Fallback (no embedding model / missing abstract):
+      TF-IDF keyword hit-count (original implementation).
+    """
+    title    = paper.get("title", "")
+    abstract = paper.get("abstract") or ""
+    full_text = (title + " " + abstract).lower()
+    kw_text   = " ".join(paper.get("keywords", [])).lower()
+    combined  = full_text + " " + kw_text
+
+    # Anti-keyword penalty (always applied)
+    anti_hits = sum(1 for kw in anti_keywords if kw.lower() in combined)
+    penalty   = anti_hits * 0.15
+
+    # ── Try embedding-based scoring ───────────────────────────────────────────
+    if topic:
+        q_vec = _get_query_vec(topic)
+        if q_vec is not None and (title or abstract):
+            try:
+                import numpy as np
+                paper_text = (title + ". " + abstract).strip()
+                p_vecs = _get_dense_vecs([paper_text])
+                if p_vecs is not None:
+                    p_vec = p_vecs[0]
+                    norm = np.linalg.norm(p_vec)
+                    if norm > 0:
+                        p_vec = p_vec / norm
+                    cosine = float(np.dot(q_vec, p_vec))
+                    # cosine is in [-1, 1]; typical range for relevant papers: [0.3, 0.9]
+                    # rescale [0.2, 0.9] → [0, 1] and clamp
+                    score = (cosine - 0.2) / 0.7
+                    score = max(0.0, min(1.0, round(score - penalty, 3)))
+                    return score
+            except Exception:
+                pass  # fall through to keyword fallback
+
+    # ── Keyword hit-count fallback ────────────────────────────────────────────
+    hits = sum(1 for kw in keywords if kw.lower() in combined)
     score = hits / max(min(len(keywords), 12), 1)
-    score -= (anti * 0.15)
+    score -= penalty
     return max(0.0, min(1.0, round(score, 3)))
 
 
@@ -747,197 +815,3 @@ def generate_pivot(idea: str, config: dict) -> dict:
             "fatal_flaw": flaw, "pivot_suggestion": pivot,
             "theoretical_framing": framing}
 
-
-
-# ---------------------------------------------------------------------------
-# Relevance Score
-# ---------------------------------------------------------------------------
-
-def compute_relevance(paper: dict, keywords: List[str], anti_keywords: List[str]) -> float:
-    """
-    Score in [0, 1] based on keyword hits in title + abstract.
-    Anti-keywords subtract weight.
-    """
-    text = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
-    kw_text = " ".join(paper.get("keywords", [])).lower()
-    full = text + " " + kw_text
-
-    hits = sum(1 for kw in keywords if kw.lower() in full)
-    anti = sum(1 for kw in anti_keywords if kw.lower() in full)
-
-    score = hits / max(len(keywords), 1)
-    score -= (anti * 0.2)
-    return max(0.0, min(1.0, round(score, 3)))
-
-
-# ---------------------------------------------------------------------------
-# ICLR Flavor Score
-# ---------------------------------------------------------------------------
-
-ICLR_POSITIVE = [
-    "representation", "latent", "latent space", "scaling law", "emergent",
-    "symmetry", "generalization", "in-context", "attention", "theoretical",
-    "analysis", "interpretability", "architecture", "pre-training",
-    "fine-tuning", "alignment", "transformer", "foundation model",
-    "formal", "proof", "theorem", "convergence", "expressivity",
-    "disentangle", "compositionality", "few-shot", "zero-shot",
-    "world model", "causal", "invariant", "universal"
-]
-
-ICLR_NEGATIVE = [
-    "user study", "deployed", "case study", "api wrapper", "middleware",
-    "pipeline", "engineering", "system design", "end-to-end system",
-    "production", "enterprise", "scraping", "heuristic", "rule-based"
-]
-
-
-def compute_iclr_flavor(paper: dict, config: dict) -> float:
-    """
-    Heuristic score: how well the paper matches 'ICLR Flavor'.
-    Returns value in [0, 1].  >= 0.5 → good fit, < 0.3 → likely reject.
-    """
-    text = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
-    good_signals = config.get("iclr_flavor_heuristics", {}).get("good_signals", ICLR_POSITIVE)
-    bad_signals  = config.get("iclr_flavor_heuristics", {}).get("bad_signals", ICLR_NEGATIVE)
-
-    positive = sum(1 for s in good_signals if s in text)
-    negative = sum(1 for s in bad_signals  if s in text)
-
-    raw = (positive - negative * 1.5) / max(len(good_signals), 1)
-    return max(0.0, min(1.0, round(raw, 3)))
-
-
-# ---------------------------------------------------------------------------
-# Impact-Niche Score
-# ---------------------------------------------------------------------------
-
-def compute_impact_niche(
-    paper: dict,
-    accepted_density: float = 1.0
-) -> float:
-    """
-    Score = (citation_velocity * max(github_stars, 1)) / accepted_density
-    Normalised log scale so outliers don't dominate.
-    """
-    vel   = max(paper.get("citation_velocity", 0.0), 0.0)
-    stars = max(paper.get("github_stars", 0), 1)
-    raw   = (vel * stars) / max(accepted_density, 0.001)
-    # Log normalise
-    import math
-    score = math.log1p(raw)
-    return round(score, 3)
-
-
-# ---------------------------------------------------------------------------
-# Reviewer stats
-# ---------------------------------------------------------------------------
-
-def compute_reviewer_stats(reviews: List[dict]) -> dict:
-    if not reviews:
-        return {"avg_rating": 0.0, "avg_confidence": 0.0, "num_reviews": 0, "ratings": []}
-    ratings     = [r.get("rating", 0.0) for r in reviews]
-    confidences = [r.get("confidence", 0.0) for r in reviews]
-    return {
-        "avg_rating":     round(float(np.mean(ratings)), 2),
-        "avg_confidence": round(float(np.mean(confidences)), 2),
-        "num_reviews":    len(reviews),
-        "ratings":        ratings,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Fatal flaw extraction
-# ---------------------------------------------------------------------------
-
-FLAW_PATTERNS = [
-    (r"too engineering(-| )heavy", "Too engineering-heavy for ICLR"),
-    (r"(lack|no|lacks|limited).{0,30}(novelty|contribution)", "Limited novelty"),
-    (r"(weak|no|missing).{0,30}(theor|formal|proof)", "Lacks theoretical grounding"),
-    (r"(narrow|limited).{0,20}(scope|applicability|generali)", "Narrow scope / limited generalization"),
-    (r"(no|missing|lack).{0,30}(abla|ablation)", "Missing ablation studies"),
-    (r"(uncl|vague|poorly).{0,20}(motivat|writ)", "Unclear motivation"),
-    (r"(dataset|benchmark).{0,20}(small|limited|bias)", "Dataset too small or biased"),
-    (r"(unfair|inadeq).{0,20}(baseline|compar)", "Inadequate baselines"),
-]
-
-
-def extract_fatal_flaws(reviews: List[dict]) -> List[str]:
-    """Pull fatal flaws from low-rating review comments."""
-    flaws: List[str] = []
-    for review in reviews:
-        rating = review.get("rating", 5)
-        comment = review.get("comment", "").lower()
-        if rating <= 4 and comment:
-            for pattern, label in FLAW_PATTERNS:
-                if re.search(pattern, comment) and label not in flaws:
-                    flaws.append(label)
-    return flaws
-
-
-# ---------------------------------------------------------------------------
-# Pivot suggestion (rule-based heuristic)
-# ---------------------------------------------------------------------------
-
-PIVOT_TEMPLATES = [
-    (
-        ["email", "calendar", "schedule", "meeting"],
-        0.25,
-        "Too applied for ICLR. Your idea focuses on a narrow workflow tool.",
-        "Reviewers cite 'Low Novelty' and 'Engineering-Heavy' for similar submissions.",
-        "Pivot to: 'Hierarchical Latent Goal Representations for Multi-Step Sequential Decision-Making in Open-Ended Environments'.",
-        "Frame the email/calendar domain as a testbed for compositional reasoning over partially-observable action spaces."
-    ),
-    (
-        ["code", "coding", "programming", "debug", "software"],
-        0.55,
-        "Moderate ICLR fit — code generation has theoretical handles if you emphasize program synthesis.",
-        "Strong acceptance rate for papers with formal semantics or execution-guided learning.",
-        "Pivot to: 'Execution-Guided Latent Program Synthesis with Self-Supervised Semantic Consistency'.",
-        "Emphasize the representation of program structure in latent space, not the engineering pipeline."
-    ),
-    (
-        ["web", "browser", "click", "navigate", "scrape"],
-        0.30,
-        "Borderline for ICLR — web/browser agents are seen as 'systems papers'.",
-        "High rejection rate for papers without grounding theory or formal task definition.",
-        "Pivot to: 'Grounded Visual-Linguistic Affordance Learning for Structured Web Navigation'.",
-        "Connect affordance theory and multimodal representations; frame task as grounded language understanding."
-    ),
-    (
-        ["document", "pdf", "report", "summarize"],
-        0.45,
-        "Moderate fit — document AI has representation angles if framed correctly.",
-        "Papers accepted when they introduce novel representation learning, not just pipelines.",
-        "Pivot to: 'Hierarchical Document Representation Learning via Cross-Granularity Contrastive Pretraining'.",
-        "Emphasize the self-supervised latent structure, not the downstream task."
-    ),
-]
-
-DEFAULT_PIVOT = (
-    0.35,
-    "Applied AI tools have a lower acceptance rate at ICLR without strong theoretical hooks.",
-    "Reviewers in 2024-2025 rejected ~72% of pure systems/agent engineering papers.",
-    "Pivot to: 'Latent Abstraction and Compositional Reasoning in Goal-Conditioned Agentic Systems'.",
-    "Frame your domain as a probe for studying emergent planning and representation in foundation models."
-)
-
-
-def generate_pivot(idea: str, config: dict) -> dict:
-    idea_lower = idea.lower()
-    for keywords, flavor, verdict, flaw, pivot, framing in PIVOT_TEMPLATES:
-        if any(kw in idea_lower for kw in keywords):
-            return {
-                "iclr_flavor_score": flavor,
-                "verdict": verdict,
-                "fatal_flaw": flaw,
-                "pivot_suggestion": pivot,
-                "theoretical_framing": framing
-            }
-    flavor, verdict, flaw, pivot, framing = DEFAULT_PIVOT
-    return {
-        "iclr_flavor_score": flavor,
-        "verdict": verdict,
-        "fatal_flaw": flaw,
-        "pivot_suggestion": pivot,
-        "theoretical_framing": framing
-    }

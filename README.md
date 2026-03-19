@@ -1,6 +1,52 @@
-# ConferencePapers — Agents for Productivity @ ICLR
+# ConferencePapers
 
-A full-stack discovery and strategy engine for analysing **ICLR 2024–2026** accepted papers in the **"Agents for Productivity"** space.
+A full-stack research discovery and strategy engine for analysing accepted (and rejected) papers across **ICLR, ICML, NeurIPS, AAAI, ACL, and EMNLP** in the **"Agents for Productivity"** space. Built on FastAPI + Vanilla JS with a three-level cache, RAG-Fusion semantic search, and an LLM-powered Pivot Engine.
+
+---
+
+## Quick Start
+
+### 1 — Create & activate the environment
+
+**conda (recommended)**
+```bash
+conda create -n conferencepapers python=3.11 -y
+conda activate conferencepapers
+```
+
+**or pip venv**
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+```
+
+### 2 — Install dependencies
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+### 3 — Start the backend
+
+```bash
+cd backend
+uvicorn main:app --reload --port 8000
+```
+
+**First-boot behaviour:**
+1. Server checks `cache/` for existing `.md` files — instant load if present.
+2. On a cold cache miss it fetches from OpenReview → arXiv (fallback) → Semantic Scholar enrichment (~30–90 s per conference-year pair).
+3. Results are persisted as Obsidian-style `.md` files; subsequent boots load in milliseconds.
+
+A **green dot** in the top-right of the UI confirms data is ready.
+
+### 4 — Open the dashboard
+
+```
+http://localhost:8000
+```
+
+No build step — the frontend is a single static HTML file served directly by FastAPI.
 
 ---
 
@@ -68,105 +114,146 @@ total_papers: 42
 
 **Opening `cache/` in Obsidian** gives you a free knowledge graph — papers wiki-link naturally via their titles.
 
-### Cache management
+### Cache management API
 
 | Endpoint | What it does |
 |---|---|
 | `GET /api/cache` | List all cached queries with metadata |
 | `GET /api/cache/{key}/raw` | Return the raw `.md` file |
-| `DELETE /api/cache/{conf}/{year}` | Invalidate one entry |
-| `POST /api/refresh?disk=true` | Clear all caches and re-fetch |
+| `DELETE /api/cache/{conference}/{year}` | Invalidate one entry |
+| `POST /api/refresh?disk=true` | Clear all caches and re-fetch from live APIs |
 
 TTL is set in `config.json → cache.ttl_days` (default **7 days**). Set to `0` to never expire.
 
 ---
 
-## Stack
+## Architecture
 
-- **Backend**: Python / FastAPI + `openreview-py` + `arxiv` + Semantic Scholar API
-- **Frontend**: Vanilla HTML5 / Tailwind CSS CDN / Plotly.js
-- **Cache**: `CacheStore` — Obsidian-style `.md` files, YAML frontmatter, wiki-links
-- **Scoring**: TF-IDF + K-Means clustering, UMAP 2D, Impact-Niche Score formula
+### Stack
 
-$$Score = \frac{Cit.Velocity \times GitHub.Stars}{Accepted.Paper.Density}$$
+| Layer | Technology |
+|---|---|
+| **Backend** | Python 3.11 / FastAPI + uvicorn |
+| **Data sources** | `openreview-py`, `arxiv`, Semantic Scholar REST API |
+| **Scoring & clustering** | scikit-learn (TF-IDF, K-Means), UMAP, numpy |
+| **Semantic search** | Azure OpenAI `text-embedding-3-small` (1536-d) via `EmbeddingStore` |
+| **LLM reasoning** | `gpt-4.1` via GitHub Copilot SDK or Azure OpenAI (`query_expander.py`, Pivot Engine) |
+| **Frontend** | Vanilla HTML5 / Tailwind CSS CDN / Plotly.js |
+| **Cache** | `CacheStore` — Obsidian `.md` + `EmbeddingStore` — `.npz` vector files |
+
+### Fetch pipeline (L1 → L2 → L3)
+
+Every paper request goes through a three-level cache guarded by per-key `asyncio.Lock` objects (thundering-herd prevention):
+
+```
+L1  In-memory Python dict          — microseconds, lost on restart
+L2  Disk .md + .npz files (cache/) — milliseconds, survives restarts
+L3  Live APIs                      — seconds/minutes, only on cold miss
+```
+
+On an L3 fetch the pipeline runs:
+1. **OpenReview extractor** — decisions, tiers (oral / spotlight / poster), reviewer ratings and confidence scores.
+2. **Semantic Scholar enrichment** — citation count, citation velocity, influential citations.
+3. **arXiv extractor** — arXiv ID, abstract, PDF URL (used as fallback when OpenReview has no abstract).
+4. **Scoring** — relevance, ICLR Flavor, Impact-Niche scores computed in-process.
+5. **Clustering** — TF-IDF vectorisation → K-Means → UMAP 2D projection (dense embeddings preferred when `EmbeddingModel` is available).
+6. **Persist** — write `.md` frontmatter file + `.npz` vector file to `cache/`.
+
+### RAG-Fusion semantic search (`/api/semantic_search`)
+
+Queries are expanded into N semantically diverse variants by the LLM (`query_expander.py`). Each variant is fetched or loaded from L1/L2. Dense embeddings for all papers are stored in `.npz` files and searched via **Reciprocal Rank Fusion (RRF)**:
+
+$$RRF(p) = \sum_i \frac{1}{k + rank_i(p)}$$
+
+The `QueryGraph` (`query_graph.py`) persists parent → child query relationships in `cache/_query_graph.json` so future searches for related topics can load sibling-query papers from disk without new API calls.
+
+### Scoring formulas
+
+**Impact-Niche Score**
+
+$$Score = \log\!\left(1 + \frac{Cit.Velocity \times \max(GitHub.Stars,\ Cit.Count / 10)}{Accepted.Paper.Density}\right)$$
+
+Falls back to `citation_count / 10` as a GitHub-star proxy for papers without a linked repository.
+
+**ICLR Flavor Score**
+
+Weighted phrase matching over title + abstract, sigmoid-normalised to [0, 1]:
+
+- Weight +3: `proof`, `theorem`, `convergence`, `lower bound`, `upper bound`, `expressivity`
+- Weight +2: `latent space`, `representation`, `scaling law`, `emergent`, `world model`, `symmetry`
+- Weight +1: `generalization`, `alignment`, `interpretability`, `in-context learning`, `architecture`
+- Weight −2: `user study`, `deployed system`, `engineering system`
+- Weight −3: `api wrapper`, `middleware`, `scraping`
+
+≥ 0.6 → good ICLR fit · 0.3–0.6 → borderline · < 0.3 → likely rejected
+
+**Relevance Score**
+
+Keyword hit-rate over `focus.keywords` minus an anti-keyword penalty (`focus.anti_keywords`), capped at 1.0.
+
+### Pivot Engine (`POST /api/pivot`)
+
+Accepts any applied idea and returns:
+- ICLR fit score with explanation
+- Identified fatal flaws based on historical reviewer patterns
+- Concrete theoretical reframing suggestions (e.g. "rename to *Multi-Step Latent Planning for Hierarchical Task Orchestration*")
 
 ---
 
-## Quick Start
+## API Reference
 
-### 1 — Create & activate the conda environment
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | Single-page dashboard |
+| `GET` | `/api/config` | Active configuration |
+| `GET` | `/api/papers` | Filtered, sorted paper list |
+| `GET` | `/api/papers/cluster/{id}` | Papers in a specific cluster |
+| `GET` | `/api/paper/{id}` | Single paper by ID |
+| `GET` | `/api/landscape` | UMAP 2D data for cluster map |
+| `GET` | `/api/funnel` | Sankey data (submission → tier) |
+| `GET` | `/api/trends` | Topic frequency across years |
+| `GET` | `/api/white_spaces` | Clusters with high GitHub traction but low paper density |
+| `GET` | `/api/semantic_search` | RAG-Fusion dense retrieval |
+| `POST` | `/api/pivot` | Pivot Engine — reframe idea for a target conference |
+| `POST` | `/api/refresh` | Invalidate caches and re-fetch |
+| `GET` | `/api/cache` | List L2 cache entries |
+| `GET` | `/api/cache/{key}/raw` | Raw `.md` cache file |
+| `DELETE` | `/api/cache/{conference}/{year}` | Invalidate one cache entry |
+| `GET` | `/api/stats` | Server stats (paper counts, cache size) |
 
-```bash
-conda create -n conferencepapers python=3.11 -y
-conda activate conferencepapers
-```
-
-### 2 — Install dependencies
-
-```bash
-pip install -r backend/requirements.txt
-```
-
-> All packages are pinned in `backend/requirements.txt`.
-
-### 3 — Start the backend
-
-```bash
-conda activate conferencepapers
-cd backend
-uvicorn main:app --reload --port 8000
-```
-
-**First boot behaviour:**
-1. Server checks `cache/` for existing `.md` files — instant load if present.
-2. On cache miss, fetches from OpenReview → arXiv fallback → Semantic Scholar enrichment (~30–90 s per year).
-3. Results are persisted as `.md` files; subsequent boots load in milliseconds.
-
-A **green dot** in the top-right of the UI confirms data is ready.
-
-### 4 — Open the dashboard
-
-```
-http://localhost:8000
-```
-
-No build step — the frontend is a single static HTML file served by FastAPI.
-
----
-
-### Running without conda (pip venv)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
-cd backend && uvicorn main:app --reload --port 8000
-```
+Interactive docs available at `http://localhost:8000/docs` (Swagger UI).
 
 ---
 
 ## Configuration
 
-Edit [`config.json`](config.json) at the project root:
+Edit [`config.json`](config.json) at the project root — no hardcoding anywhere in the codebase.
 
 | Key | Purpose |
 |---|---|
-| `conferences.ICLR.*` | Add/change venue IDs and acceptance tiers |
-| `focus.keywords` | Topics that count as "Agents for Productivity" |
-| `iclr_flavor_heuristics` | Signals that boost/penalise ICLR flavor score |
-| `apis.*` | Base URLs and API keys |
-| `cache.ttl_days` | How many days before a cache entry goes stale |
-| `cache.dir` | Path to the `.md` cache directory (relative to project root) |
+| `conferences.{CONF}.{year}.venue_id` | OpenReview venue string |
+| `conferences.{CONF}.{year}.acceptance_tiers` | Decision label → tier mapping |
+| `focus.keywords` | Topics counted as "Agents for Productivity" |
+| `focus.anti_keywords` | Topics that lower the relevance score |
+| `iclr_flavor_heuristics` | Config-level good/bad signal overrides |
+| `apis.semantic_scholar.fields` | Fields requested from Semantic Scholar |
+| `apis.arxiv.max_results` | arXiv results per query |
+| `llm.model_name` | LLM used by the Pivot Engine and Query Expander |
+| `llm.model_endpoint` | `"ghcp"` for GitHub Copilot SDK, or an Azure URL |
+| `cache.ttl_days` | Days before a cache entry goes stale (0 = never) |
+| `cache.dir` | Path to the `.md`/`.npz` cache directory |
+
+Environment variable overrides: `LLM_MODEL_NAME`, `LLM_MODEL_ENDPOINT`, `EMBEDDING_DEPLOYMENT`.
 
 ---
 
 ## Data Sources
 
-| Source | Data |
+| Source | Data retrieved |
 |---|---|
-| [OpenReview](https://openreview.net) | Decisions, reviewer ratings, confidence scores |
-| [Semantic Scholar](https://www.semanticscholar.org) | Citation counts, citation velocity |
-| [arXiv](https://arxiv.org) | Full-text search, PDF links (fallback) |
+| [OpenReview](https://openreview.net) | Decisions, acceptance tiers, reviewer ratings (1–10), confidence scores |
+| [Semantic Scholar](https://www.semanticscholar.org) | Citation count, citation velocity, influential citations |
+| [arXiv](https://arxiv.org) | Abstract, PDF URL, arXiv ID (fallback when OpenReview data is sparse) |
 
 ---
 
@@ -174,103 +261,27 @@ Edit [`config.json`](config.json) at the project root:
 
 ```
 ConferencePapers/
-├── config.json                          # All configuration (no hardcoding)
+├── config.json                          # All runtime configuration
 ├── agents.md                            # Product spec
-├── cache/                               # Obsidian-style .md query cache
-│   ├── _index.md                        # Master query log (auto-maintained)
-│   └── ICLR_2024_agents_for_productivity.md
+├── cache/                               # L2 cache (auto-created)
+│   ├── _index.md                        # Master query log (wiki-links)
+│   ├── _query_graph.json                # Query expansion relationship graph
+│   ├── ICLR_2024_agents_for_productivity.md   # Per-query Obsidian .md file
+│   └── ICLR_2024_agents_for_productivity.npz  # Per-query embedding vectors
 ├── backend/
-│   ├── main.py                          # FastAPI app + all API endpoints
-│   ├── models.py                        # Pydantic data models
-│   ├── scorer.py                        # Impact-Niche, ICLR Flavor, clustering
-│   ├── cache_store.py                   # L2 disk cache (Obsidian .md format)
+│   ├── main.py                          # FastAPI app, all endpoints, fetch pipeline
+│   ├── schemas.py                       # Pydantic data models (Paper, PivotRequest, …)
+│   ├── scorer.py                        # Relevance, ICLR Flavor, Impact-Niche, clustering
+│   ├── cache_store.py                   # L2 disk cache — Obsidian .md read/write
+│   ├── embedding_store.py               # .npz vector store — build / search / RRF
+│   ├── query_expander.py                # LLM + rule-based query expansion
+│   ├── query_graph.py                   # Persistent query relationship graph
 │   ├── requirements.txt
 │   └── extractors/
-│       ├── openreview_extractor.py
+│       ├── __init__.py
+│       ├── openreview_extractor.py      # OpenReview API v2 client
 │       ├── semantic_scholar_extractor.py
 │       └── arxiv_extractor.py
 └── frontend/
-    └── index.html                       # Single-page dashboard
+    └── index.html                       # Single-page dashboard (Tailwind + Plotly.js)
 ```
-
-## Quick Start
-
-### 1 — Create & activate the conda environment
-
-```bash
-conda create -n conferencepapers python=3.11 -y
-conda activate conferencepapers
-```
-
-### 2 — Install dependencies
-
-```bash
-pip install -r backend/requirements.txt
-```
-
-> All packages (FastAPI, openreview-py, arxiv, scikit-learn, umap-learn, sentence-transformers, Plotly, etc.) are pinned in `backend/requirements.txt`.
-
-### 3 — Start the backend
-
-```bash
-conda activate conferencepapers
-cd backend
-uvicorn main:app --reload --port 8000
-```
-
-On first boot the server pre-warms its cache — it fetches ICLR 2024–2026 accepted papers from OpenReview, enriches them via Semantic Scholar, runs TF-IDF clustering and UMAP embedding. This takes **~30–90 s** depending on API latency. A green dot in the top-right of the UI confirms data is ready.
-
-### 4 — Open the dashboard
-
-```
-http://localhost:8000
-```
-
-No extra build step — the frontend is a single static HTML file served directly by FastAPI.
-
----
-
-### Running without conda (pip venv)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
-cd backend && uvicorn main:app --reload --port 8000
-```
-
-## Configuration
-
-Edit [`config.json`](config.json) at the project root to:
-- Add/change conference years (`conferences.ICLR.*`)
-- Adjust focus keywords (`focus.keywords`)
-- Tune ICLR flavor signals (`iclr_flavor_heuristics`)
-- Switch API keys / base URLs (`apis.*`)
-
-## Data Sources
-
-| Source | Data |
-|---|---|
-| [OpenReview](https://openreview.net) | Decisions, reviewer ratings, confidence scores |
-| [Semantic Scholar](https://www.semanticscholar.org) | Citation counts, citation velocity |
-| [arXiv](https://arxiv.org) | Full-text search, PDF links (fallback) |
-
-## Project Structure
-
-```
-ConferencePapers/
-├── config.json                    # All configuration (no hardcoding)
-├── agents.md                      # Product spec
-├── backend/
-│   ├── main.py                    # FastAPI app + all API endpoints
-│   ├── models.py                  # Pydantic data models
-│   ├── scorer.py                  # Impact-Niche, ICLR Flavor, clustering
-│   ├── requirements.txt
-│   └── extractors/
-│       ├── openreview_extractor.py
-│       ├── semantic_scholar_extractor.py
-│       └── arxiv_extractor.py
-└── frontend/
-    └── index.html                 # Single-page dashboard
-```
-# ConferencePapers

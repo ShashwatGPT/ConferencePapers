@@ -122,3 +122,90 @@ class SemanticScholarExtractor:
             return round(count / months, 2)
         except Exception:
             return 0.0
+
+    # ── Citation traversal ────────────────────────────────────────────────────
+
+    async def fetch_references(
+        self,
+        s2_ids: List[str],
+        limit_per_paper: int = 50,
+    ) -> List[dict]:
+        """
+        Fetch references for each S2 paper ID.
+        Returns a flat list of unique referenced-paper dicts, normalised to the
+        same schema as papers returned by arXiv/OpenReview extractors.
+
+        Each returned dict has at minimum:
+          title, abstract (may be empty), year, s2_paper_id,
+          arxiv_id (if available), arxiv_url, citation_count,
+          venue, publication_venue, tier="arxiv" (resolved later)
+        """
+        REF_FIELDS = (
+            "title,abstract,year,citationCount,venue,publicationVenue,"
+            "externalIds,openAccessPdf,publicationDate,influentialCitationCount"
+        )
+        seen: set = set()
+        results: list = []
+
+        async with httpx.AsyncClient(headers=self.headers, timeout=20) as client:
+            for idx, s2_id in enumerate(s2_ids):
+                if not s2_id:
+                    continue
+                try:
+                    r = await client.get(
+                        f"{self.base}/paper/{s2_id}/references",
+                        params={"fields": REF_FIELDS, "limit": limit_per_paper},
+                    )
+                    if r.status_code == 429:
+                        await asyncio.sleep(5)
+                        continue
+                    if r.status_code != 200:
+                        continue
+                    data = r.json().get("data", [])
+                    for item in data:
+                        ref = item.get("citedPaper") or {}
+                        if not ref:
+                            continue
+                        ref_id = ref.get("paperId", "")
+                        if not ref_id or ref_id in seen:
+                            continue
+                        seen.add(ref_id)
+                        results.append(self._ref_to_paper(ref))
+                except Exception as e:
+                    logger.debug(f"[S2 refs] {s2_id}: {e}")
+
+                if idx % 2 == 1:
+                    await asyncio.sleep(_S2_DELAY)
+
+        logger.info(f"[S2 refs] Fetched {len(results)} unique references from {len(s2_ids)} papers")
+        return results
+
+    def _ref_to_paper(self, ref: dict) -> dict:
+        """Convert an S2 reference object to our paper dict schema."""
+        ext = ref.get("externalIds") or {}
+        arxiv_id = ext.get("ArXiv", "")
+        oa = ref.get("openAccessPdf") or {}
+        venue_str = ref.get("venue") or ""
+        if not venue_str:
+            pub_venue = ref.get("publicationVenue") or {}
+            venue_str = pub_venue.get("name") or ""
+        return {
+            "id":                 ref.get("paperId", ""),
+            "title":              ref.get("title", ""),
+            "abstract":           ref.get("abstract") or "",
+            "year":               ref.get("year") or 0,
+            "authors":            [],
+            "venue":              venue_str,
+            "publication_venue":  venue_str,
+            "tier":               "arxiv",   # resolved later by _resolve_tiers_from_venue
+            "decision":           "",
+            "arxiv_id":           arxiv_id,
+            "arxiv_url":          f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else "",
+            "pdf_url":            oa.get("url", ""),
+            "semantic_scholar_id": ref.get("paperId", ""),
+            "citation_count":     ref.get("citationCount", 0) or 0,
+            "citation_velocity":  self._calc_velocity(ref),
+            "github_stars":       0,
+            "keywords":           [],
+            "source":             "citation_traversal",
+        }
